@@ -17,7 +17,6 @@
 //  docs/document-format.md → "Autosave design".
 //
 
-import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
@@ -467,8 +466,8 @@ extension NotebookViewController {
     }
 
     private func showExportOptions() {
-        let sheet = UIHostingController(
-            rootView: PDFExportSheet(
+        let sheet = UINavigationController(
+            rootViewController: PDFExportViewController(
                 document: document, notebookTitle: notebookTitle, coordinator: coordinator))
         sheet.modalPresentationStyle = .formSheet
         present(sheet, animated: true)
