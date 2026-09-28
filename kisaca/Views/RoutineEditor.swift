@@ -228,7 +228,7 @@ private struct SlotRow: View {
 
 /// Edits an existing lecture's routine, from its home screen.
 struct RoutineSheet: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     @Environment(\.dismiss) private var dismiss
     @State private var draft: RoutineDraft
 

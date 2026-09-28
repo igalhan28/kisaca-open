@@ -12,7 +12,7 @@ import SwiftUI
 import UIKit
 
 struct PDFExportSheet: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     /// "W3 · Mon", or "Lectures · …" for a whole section — used in the file name.
     let notebookTitle: String
     var coordinator: NotebookCoordinator
@@ -127,7 +127,7 @@ struct PDFExportSheet: View {
 // MARK: - Page thumbnail cell
 
 private struct PageThumbnailCell: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     let pageID: UUID
     let pageNumber: Int
     let isSelected: Bool
@@ -160,6 +160,7 @@ private struct PageThumbnailCell: View {
 
     @ViewBuilder
     private var thumbnailImage: some View {
+        let _ = document.pageContentRevision  // thumbnails aren't observed themselves
         if let data = document.getThumbnailData(for: pageID), let uiImage = UIImage(data: data) {
             Image(uiImage: uiImage)
                 .resizable()

@@ -19,7 +19,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MaterialPane: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     /// The material shown; `nil` shows a picker.
     @Binding var materialID: UUID?
     var onClose: () -> Void

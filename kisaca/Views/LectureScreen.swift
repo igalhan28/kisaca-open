@@ -13,7 +13,7 @@ import SwiftUI
 import UIKit
 
 struct LectureScreen: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     let file: LectureFile
 
     @Environment(\.scenePhase) private var scenePhase

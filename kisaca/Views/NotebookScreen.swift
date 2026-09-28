@@ -27,7 +27,7 @@ nonisolated struct NotebookRoute: Hashable {
 }
 
 struct NotebookScreen: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     let route: NotebookRoute
 
     @State private var coordinator = NotebookCoordinator()

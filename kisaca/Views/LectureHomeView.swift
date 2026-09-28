@@ -21,7 +21,7 @@ import SwiftUI
 struct MaterialsRoute: Hashable {}
 
 struct LectureHomeView: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     /// Renames the lecture *and* its file — ContentView.applyLectureName.
     var onRename: (String) -> Void
 

@@ -21,7 +21,7 @@
 import SwiftUI
 
 struct SectionSessionsView: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     let sectionID: UUID
 
     @State private var showingAddSession = false
@@ -160,6 +160,8 @@ struct SectionSessionsView: View {
 
     @ViewBuilder
     private var wholeNotebookRow: some View {
+        // An upcoming session joins once it has notes — page data isn't observed itself.
+        let _ = document.pageContentRevision
         let included = PageRepository.notebookSessions(inSection: sectionID, of: document)
         if let latest = included.last {
             Section {
@@ -247,7 +249,7 @@ private struct SessionGroup: Identifiable {
 /// One session: its title, date, and how much is in it. Today's session is marked;
 /// upcoming ones are dimmed.
 private struct SessionRow: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     let session: LectureSession
 
     var body: some View {
@@ -272,6 +274,7 @@ private struct SessionRow: View {
 
     private var details: String {
         let pages = "\(session.pageIDs.count) page\(session.pageIDs.count == 1 ? "" : "s")"
+        _ = document.pageContentRevision  // page data isn't observed itself
         let hasNotes = session.pageIDs.contains { document.getPageData(for: $0) != nil }
         let parts = [
             document.manifest.subtitle(for: session),

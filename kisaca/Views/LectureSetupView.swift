@@ -24,7 +24,7 @@
 import SwiftUI
 
 struct LectureSetupView: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
     /// Pre-fill for the name field — the file's own name when the user already chose
     /// one in the document browser, otherwise empty. See ContentView.
     var initialName: String = ""

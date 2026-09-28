@@ -19,7 +19,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MaterialsView: View {
-    @ObservedObject var document: LectureDocument
+    let document: LectureDocument
 
     @State private var showingImporter = false
     @State private var searchText = ""
