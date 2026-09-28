@@ -19,13 +19,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// What a `NotebookScreen` shows — the navigation value pushed from a section's list.
-nonisolated struct NotebookRoute: Hashable {
-    var scope: PageRepository.Scope
-    /// For a whole-section notebook: the session to open at.
-    var initialSessionID: UUID?
-}
-
 struct NotebookScreen: View {
     let document: LectureDocument
     let route: NotebookRoute

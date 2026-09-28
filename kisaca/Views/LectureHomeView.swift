@@ -17,9 +17,6 @@
 
 import SwiftUI
 
-/// Navigation value for `MaterialsView` — there is one per lecture, so it carries nothing.
-struct MaterialsRoute: Hashable {}
-
 struct LectureHomeView: View {
     let document: LectureDocument
     /// Renames the lecture *and* its file — ContentView.applyLectureName.

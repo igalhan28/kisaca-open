@@ -10,19 +10,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// An open lecture's own screen (setup or its sections).
-struct LectureRoute: Hashable {
-    let lectureID: UUID
-}
-
-/// A notebook opened straight from a home-screen card, one level above its lecture.
-/// Its own type — not `NotebookRoute` — because `SectionSessionsView` already
-/// registers a destination for that one further down the stack.
-struct LectureNotebookRoute: Hashable {
-    let lectureID: UUID
-    let notebook: NotebookRoute
-}
-
 struct LibraryRootView: View {
     @Environment(LectureLibrary.self) private var library
     @Environment(\.scenePhase) private var scenePhase
