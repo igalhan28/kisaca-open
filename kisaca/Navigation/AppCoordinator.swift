@@ -141,7 +141,9 @@ final class AppCoordinator: NSObject {
     private func notebookController(for lecture: OpenLecture, route: NotebookRoute)
         -> UIViewController
     {
-        hosting(NotebookScreen(document: lecture.document, route: route))
+        let controller = NotebookViewController(document: lecture.document, route: route)
+        controller.navigationItem.largeTitleDisplayMode = .never
+        return controller
     }
 
     /// Every screen below the home screen has an inline title.
