@@ -15,8 +15,10 @@ import UIKit
 struct LectureScreen: View {
     let document: LectureDocument
     let file: LectureFile
-
-    @Environment(\.scenePhase) private var scenePhase
+    /// Pushes a section's sessions (`AppCoordinator`).
+    var onOpenSection: (UUID) -> Void
+    /// Pushes the lecture's materials (`AppCoordinator`).
+    var onOpenMaterials: () -> Void
 
     /// The name a rename is currently moving the file to; non-nil only while that
     /// coordinated move is in flight. It de-duplicates the commit SwiftUI's renameable
@@ -38,7 +40,9 @@ struct LectureScreen: View {
             } else {
                 LectureHomeView(
                     document: document,
-                    onRename: applyLectureName
+                    onRename: applyLectureName,
+                    onOpenSection: onOpenSection,
+                    onOpenMaterials: onOpenMaterials
                 )
             }
         }
@@ -55,9 +59,15 @@ struct LectureScreen: View {
             reconcileNameWithFile()
             DocumentConflictResolver.resolveIfNeeded(file)
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { reconcileNameWithFile() }
-            if phase == .background { file.autosave(completionHandler: nil) }
+        // UIScene notifications rather than `scenePhase`: this view is hosted by UIKit,
+        // outside the SwiftUI app lifecycle that `scenePhase` comes from.
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in
+            reconcileNameWithFile()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)
+        ) { _ in
+            file.autosave(completionHandler: nil)
         }
     }
 

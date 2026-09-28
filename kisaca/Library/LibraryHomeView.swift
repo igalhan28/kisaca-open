@@ -19,7 +19,7 @@ struct LibraryHomeView: View {
     var onCreate: () -> Void
     /// After an import, with the new files' URLs.
     var onImported: ([URL]) -> Void
-    @Binding var errorMessage: String?
+    var onError: (String) -> Void
 
     @State private var showingImporter = false
     @State private var showingSettings = false
@@ -92,12 +92,12 @@ struct LibraryHomeView: View {
                 Task {
                     let result = await library.importLectures(from: urls)
                     if !result.failed.isEmpty {
-                        errorMessage = "Couldn't import " + result.failed.joined(separator: ", ") + "."
+                        onError("Couldn't import " + result.failed.joined(separator: ", ") + ".")
                     }
                     onImported(result.imported)
                 }
             case .failure(let error):
-                errorMessage = error.localizedDescription
+                onError(error.localizedDescription)
             }
         }
         .sheet(isPresented: $showingSettings) {
@@ -204,7 +204,7 @@ struct LibraryHomeView: View {
             do {
                 try await library.delete(entry)
             } catch {
-                errorMessage = error.localizedDescription
+                onError(error.localizedDescription)
             }
         }
     }

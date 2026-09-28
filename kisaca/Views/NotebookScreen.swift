@@ -26,7 +26,6 @@ struct NotebookScreen: View {
     @State private var coordinator = NotebookCoordinator()
     @State private var showingExportOptions = false
     @State private var showingDeletePageConfirmation = false
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     // Material pane. Side and width are device preferences (AppPreferences) — kept across
@@ -216,10 +215,10 @@ struct NotebookScreen: View {
                 coordinator.reclaimToolPicker()
             }
         }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase != .active {
-                coordinator.flushActivePage()
-            }
+        // Leaving the active state (inactive or background). A UIScene notification, not
+        // `scenePhase`: this view is hosted by UIKit, outside the SwiftUI app lifecycle.
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)) { _ in
+            coordinator.flushActivePage()
         }
     }
 }

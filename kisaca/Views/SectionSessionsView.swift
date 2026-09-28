@@ -17,12 +17,16 @@
 //  (`LectureManifest.generateSessions`); the "+" here is for anything outside it —
 //  a make-up lecture, an extra exercise sheet.
 //
+//  Pushed by UIKit (AppCoordinator); rows open a notebook through `onOpenNotebook`.
+//
 
 import SwiftUI
 
 struct SectionSessionsView: View {
     let document: LectureDocument
     let sectionID: UUID
+    /// Pushes a notebook (`AppCoordinator`).
+    var onOpenNotebook: (NotebookRoute) -> Void
 
     @State private var showingAddSession = false
     @State private var newSessionDate = Date()
@@ -72,7 +76,9 @@ struct SectionSessionsView: View {
                 ForEach(groups) { group in
                     Section {
                         ForEach(group.sessions) { session in
-                            NavigationLink(value: NotebookRoute(scope: .session(session.id))) {
+                            NavigationRow {
+                                onOpenNotebook(NotebookRoute(scope: .session(session.id)))
+                            } label: {
                                 SessionRow(document: document, session: session)
                             }
                             .contextMenu {
@@ -111,9 +117,6 @@ struct SectionSessionsView: View {
         }
         .navigationTitle(section?.name ?? "Section")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: NotebookRoute.self) { route in
-            NotebookScreen(document: document, route: route)
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -165,9 +168,10 @@ struct SectionSessionsView: View {
         let included = PageRepository.notebookSessions(inSection: sectionID, of: document)
         if let latest = included.last {
             Section {
-                NavigationLink(
-                    value: NotebookRoute(scope: .section(sectionID), initialSessionID: latest.id)
-                ) {
+                NavigationRow {
+                    onOpenNotebook(
+                        NotebookRoute(scope: .section(sectionID), initialSessionID: latest.id))
+                } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Whole Notebook")
@@ -298,6 +302,6 @@ private struct SessionRow: View {
     ]
     doc.manifest.generateSessions()
     return NavigationStack {
-        SectionSessionsView(document: doc, sectionID: section.id)
+        SectionSessionsView(document: doc, sectionID: section.id, onOpenNotebook: { _ in })
     }
 }

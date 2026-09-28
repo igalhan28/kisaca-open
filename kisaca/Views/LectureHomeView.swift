@@ -5,22 +5,21 @@
 //  Top level of the main interface skeleton described in the project brief:
 //  Lecture (this screen) → Section → Session (dated notebook), plus the lecture's
 //  Materials (its files) in their own row at the top. Shown once
-//  `document.manifest.needsSetup` is false — see ContentView.swift.
+//  `document.manifest.needsSetup` is false — see LectureScreen.swift.
 //
-//  This is the root of the app's single navigation bar (ContentView owns the
-//  NavigationStack and hides DocumentGroup's own bar), so it re-hosts the renameable
-//  document title. Back-to-the-browser is the system's own close chevron, which
-//  DocumentGroup places in this bar's leading position — this view deliberately adds
-//  no back button of its own, or the two sit side by side doing the same thing.
-//  Everything below this screen just gets the ordinary hierarchical back button for free.
+//  Pushed by UIKit (AppCoordinator) inside a `UIHostingController`; its renameable
+//  title is the lecture's name. Rows open the next screen through the closures below
+//  (`NavigationRow`), not `NavigationLink` — there is no `NavigationStack` to push onto.
 //
 
 import SwiftUI
 
 struct LectureHomeView: View {
     let document: LectureDocument
-    /// Renames the lecture *and* its file — ContentView.applyLectureName.
+    /// Renames the lecture *and* its file — LectureScreen.applyLectureName.
     var onRename: (String) -> Void
+    var onOpenSection: (UUID) -> Void
+    var onOpenMaterials: () -> Void
 
     @State private var showingAddSection = false
     @State private var showingRoutine = false
@@ -41,7 +40,7 @@ struct LectureHomeView: View {
 
             Section {
             ForEach(document.manifest.sections(sortedBySortOrder: true)) { section in
-                NavigationLink(value: section) {
+                NavigationRow { onOpenSection(section.id) } label: {
                     HStack {
                         Label {
                             VStack(alignment: .leading, spacing: 2) {
@@ -78,12 +77,6 @@ struct LectureHomeView: View {
         }
         .navigationTitle(lectureName)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: LectureSection.self) { section in
-            SectionSessionsView(document: document, sectionID: section.id)
-        }
-        .navigationDestination(for: MaterialsRoute.self) { _ in
-            MaterialsView(document: document)
-        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -112,7 +105,7 @@ struct LectureHomeView: View {
     /// counterpart of a section's Whole Notebook row.
     private var materialsRow: some View {
         Section {
-            NavigationLink(value: MaterialsRoute()) {
+            NavigationRow(action: onOpenMaterials) {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Materials")
@@ -175,6 +168,6 @@ struct LectureHomeView: View {
 extension LectureHomeView {
     /// Preview-only convenience.
     fileprivate init(doc: LectureDocument) {
-        self.init(document: doc, onRename: { _ in })
+        self.init(document: doc, onRename: { _ in }, onOpenSection: { _ in }, onOpenMaterials: {})
     }
 }
