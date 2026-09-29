@@ -8,8 +8,8 @@
 //  on one) before iCloud has synced them. The document is then `.inConflict`. Under
 //  the old DocumentGroup it never finished opening — the browser stayed on top and
 //  the app looked frozen (seen on the iPad with "Anal II" and "TheoC 2"). Nothing
-//  handles conflicts for us, so `LectureScreen` calls this on its `LectureFile`
-//  when it appears and on every state change.
+//  handles conflicts for us, so `LectureFileSync` calls this on its `LectureFile`
+//  when the lecture opens and on every state change.
 //
 //  The versions can hold very different data — one "TheoC 2" conflict had 44 sessions
 //  against 3 in the current version — so nothing is picked automatically: the user

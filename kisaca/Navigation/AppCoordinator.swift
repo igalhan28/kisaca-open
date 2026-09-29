@@ -21,6 +21,8 @@ final class AppCoordinator: NSObject {
     private let library: LectureLibrary
     private let home = HomeModel()
     private var homeController: UIViewController!
+    /// By `OpenLecture.id`; dropped when the lectures are closed.
+    private var syncs: [UUID: LectureFileSync] = [:]
 
     init(library: LectureLibrary) {
         self.library = library
@@ -117,25 +119,49 @@ final class AppCoordinator: NSObject {
 
     // MARK: - Screens
 
+    /// The lecture's name/file sync, one per open lecture for as long as it is open —
+    /// shared by its setup form and its home screen.
+    private func sync(for lecture: OpenLecture) -> LectureFileSync {
+        if let sync = syncs[lecture.id] { return sync }
+        let sync = LectureFileSync(document: lecture.document, file: lecture.file)
+        syncs[lecture.id] = sync
+        return sync
+    }
+
+    /// The setup form for a lecture that isn't set up yet, otherwise its home screen.
     private func lectureController(for lecture: OpenLecture) -> UIViewController {
-        hosting(
-            LectureScreen(
-                document: lecture.document, file: lecture.file,
-                onOpenSection: { [weak self] sectionID in
-                    self?.push(self?.sectionController(for: lecture, sectionID: sectionID))
-                },
-                onOpenMaterials: { [weak self] in
-                    self?.push(self?.hosting(MaterialsView(document: lecture.document)))
+        let sync = sync(for: lecture)
+        guard lecture.document.manifest.needsSetup else { return lectureHome(for: lecture) }
+
+        weak var setup: UIViewController?
+        let controller = hosting(
+            LectureSetupView(
+                document: lecture.document, initialName: sync.suggestedSetupName,
+                onCommitName: { [weak self] name in
+                    sync.applyLectureName(name)
+                    if let setup { self?.replace(setup, with: self?.lectureHome(for: lecture)) }
                 }))
+        setup = controller
+        return controller
+    }
+
+    private func lectureHome(for lecture: OpenLecture) -> UIViewController {
+        let home = LectureHomeViewController(sync: sync(for: lecture))
+        home.onOpenSection = { [weak self] sectionID in
+            self?.push(self?.sectionController(for: lecture, sectionID: sectionID))
+        }
+        home.onOpenMaterials = { [weak self] in
+            self?.push(MaterialsViewController(document: lecture.document))
+        }
+        return home
     }
 
     private func sectionController(for lecture: OpenLecture, sectionID: UUID) -> UIViewController {
-        hosting(
-            SectionSessionsView(
-                document: lecture.document, sectionID: sectionID,
-                onOpenNotebook: { [weak self] route in
-                    self?.push(self?.notebookController(for: lecture, route: route))
-                }))
+        SectionSessionsViewController(
+            document: lecture.document, sectionID: sectionID,
+            onOpenNotebook: { [weak self] route in
+                self?.push(self?.notebookController(for: lecture, route: route))
+            })
     }
 
     private func notebookController(for lecture: OpenLecture, route: NotebookRoute)
@@ -158,6 +184,20 @@ final class AppCoordinator: NSObject {
         navigationController.pushViewController(controller, animated: true)
     }
 
+    /// Swaps one screen on the stack for another in place, with a cross-fade — the setup
+    /// form turning into the lecture's home screen once it's done.
+    private func replace(_ old: UIViewController, with new: UIViewController?) {
+        guard let new else { return }
+        var stack = navigationController.viewControllers
+        guard let index = stack.firstIndex(of: old) else { return }
+        stack[index] = new
+        UIView.transition(
+            with: navigationController.view, duration: 0.25, options: .transitionCrossDissolve
+        ) {
+            self.navigationController.setViewControllers(stack, animated: false)
+        }
+    }
+
     private func showError(_ message: String) {
         let alert = UIAlertController(
             title: "Something Went Wrong", message: message, preferredStyle: .alert)
@@ -176,6 +216,7 @@ extension AppCoordinator: UINavigationControllerDelegate {
         animated: Bool
     ) {
         guard viewController === homeController, !library.openLectures.isEmpty else { return }
+        syncs = [:]
         Task { await library.closeAll() }
     }
 }
