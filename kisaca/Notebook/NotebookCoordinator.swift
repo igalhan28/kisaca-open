@@ -159,7 +159,7 @@ final class NotebookCoordinator {
     /// Triggers async PDF generation; hands the file to `onPDFReady` when done.
     /// - Parameters:
     ///   - pageIndices: pages to include, in order. `nil` exports every page (used by
-    ///     "Export All"); a subset is used by the "Select Pages" flow (`PDFExportSheet`).
+    ///     "Export All"); a subset is used by the "Select Pages" flow (`PDFExportViewController`).
     ///   - fileName: desired PDF name (without extension), e.g. "Calculus II - Exercise
     ///     Sessions - 29.10.2026". `nil` falls back to a timestamped default.
     func generatePDF(pageIndices: [Int]? = nil, fileName: String? = nil) {
