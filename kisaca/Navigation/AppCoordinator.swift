@@ -2,9 +2,10 @@
 //  AppCoordinator.swift
 //  kisaca
 //
-//  One window's navigation: a `UINavigationController` whose root is the home screen.
-//  Screens not yet converted to UIKit are SwiftUI views pushed in `UIHostingController`s
-//  (docs/uikit-migration.md); they navigate by calling the closures they're given here.
+//  One window's navigation: a `UINavigationController` whose root is the home screen
+//  (`LibraryViewController`). Screens navigate by calling the closures they're given
+//  here; the forms that are still SwiftUI are pushed in `UIHostingController`s
+//  (docs/uikit-migration.md).
 //
 //  Took over from LibraryRootView's `NavigationStack`: a lecture is opened before it is
 //  pushed, a session card pushes the lecture and then its notebook (so Back goes
@@ -19,32 +20,26 @@ final class AppCoordinator: NSObject {
     let navigationController: UINavigationController
 
     private let library: LectureLibrary
-    private let home = HomeModel()
-    private var homeController: UIViewController!
+    private let home: LibraryViewController
     /// By `OpenLecture.id`; dropped when the lectures are closed.
     private var syncs: [UUID: LectureFileSync] = [:]
 
     init(library: LectureLibrary) {
         self.library = library
         navigationController = UINavigationController()
+        home = LibraryViewController(library: library)
         super.init()
 
-        let homeView = HomeRoot(
-            model: home,
-            onOpen: { [weak self] entry, session in self?.open(entry.url, session: session) },
-            onCreate: { [weak self] in self?.createLecture() },
-            onImported: { [weak self] urls in
-                if urls.count == 1 { self?.open(urls[0], session: nil) }
-            },
-            onError: { [weak self] message in self?.showError(message) }
-        )
-        .environment(library)
-        homeController = UIHostingController(rootView: homeView)
-        homeController.navigationItem.largeTitleDisplayMode = .always
+        home.onOpen = { [weak self] entry, session in self?.open(entry.url, session: session) }
+        home.onCreate = { [weak self] in self?.createLecture() }
+        home.onImported = { [weak self] urls in
+            if urls.count == 1 { self?.open(urls[0], session: nil) }
+        }
+        home.onError = { [weak self] message in self?.showError(message) }
 
         navigationController.navigationBar.prefersLargeTitles = true
         navigationController.delegate = self
-        navigationController.setViewControllers([homeController], animated: false)
+        navigationController.setViewControllers([home], animated: false)
     }
 
     /// Finds the lectures, then opens the files the window was launched with. The files
@@ -89,7 +84,7 @@ final class AppCoordinator: NSObject {
             defer { home.openingID = nil }
             do {
                 let lecture = try await library.open(url)
-                var stack = [homeController!, lectureController(for: lecture)]
+                var stack: [UIViewController] = [home, lectureController(for: lecture)]
                 if let session {
                     stack.append(
                         notebookController(
@@ -146,14 +141,14 @@ final class AppCoordinator: NSObject {
     }
 
     private func lectureHome(for lecture: OpenLecture) -> UIViewController {
-        let home = LectureHomeViewController(sync: sync(for: lecture))
-        home.onOpenSection = { [weak self] sectionID in
+        let controller = LectureHomeViewController(sync: sync(for: lecture))
+        controller.onOpenSection = { [weak self] sectionID in
             self?.push(self?.sectionController(for: lecture, sectionID: sectionID))
         }
-        home.onOpenMaterials = { [weak self] in
+        controller.onOpenMaterials = { [weak self] in
             self?.push(MaterialsViewController(document: lecture.document))
         }
-        return home
+        return controller
     }
 
     private func sectionController(for lecture: OpenLecture, sectionID: UUID) -> UIViewController {
@@ -215,31 +210,8 @@ extension AppCoordinator: UINavigationControllerDelegate {
         _ navigationController: UINavigationController, didShow viewController: UIViewController,
         animated: Bool
     ) {
-        guard viewController === homeController, !library.openLectures.isEmpty else { return }
+        guard viewController === home, !library.openLectures.isEmpty else { return }
         syncs = [:]
         Task { await library.closeAll() }
-    }
-}
-
-// MARK: - Home screen (hosted)
-
-/// What the hosted home screen shows that the coordinator changes.
-@Observable
-private final class HomeModel {
-    /// The entry being opened, so its card can show progress and ignore a second tap.
-    var openingID: String?
-}
-
-private struct HomeRoot: View {
-    let model: HomeModel
-    var onOpen: (LectureEntry, _ session: UUID?) -> Void
-    var onCreate: () -> Void
-    var onImported: ([URL]) -> Void
-    var onError: (String) -> Void
-
-    var body: some View {
-        LibraryHomeView(
-            openingID: model.openingID, onOpen: onOpen, onCreate: onCreate,
-            onImported: onImported, onError: onError)
     }
 }
