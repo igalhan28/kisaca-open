@@ -5,23 +5,28 @@
 //  The in-memory model of one `.kisaca` lecture package. `LectureFile` (the app's
 //  `UIDocument`) owns one of these and hands it the package's `FileWrapper` on every
 //  load and asks it for a new one on every save. See docs/document-format.md
-//  ("Document format" and "Autosave design") for why page data is not @Published and
+//  ("Document format" and "Autosave design") for why page data is not observed and
 //  how autosave is triggered, and docs/library.md for how files are found and opened.
 //
 
-import Combine
 import Foundation
-import SwiftUI
+import Observation
 import UIKit
 import UniformTypeIdentifiers
 
-// `@MainActor` like everything else in the app: `@Published` state must be mutated on
-// the main actor, and UIKit calls `UIDocument.load(fromContents:)` and
-// `contents(forType:)` — the only two entry points from the file system — on the main
-// queue. See docs/actor-isolation.md for the history (it used to be a
-// `ReferenceFileDocument` behind `DocumentGroup`).
+// `@MainActor` like everything else in the app: observed state is mutated on the main
+// actor, and UIKit calls `UIDocument.load(fromContents:)` and `contents(forType:)` — the
+// only two entry points from the file system — on the main queue. See
+// docs/actor-isolation.md for the history (it used to be a `ReferenceFileDocument`
+// behind `DocumentGroup`, which is why it was an `ObservableObject` until the UIKit
+// migration — docs/uikit-migration.md).
+//
+// `@Observable` so both SwiftUI and UIKit (which tracks `@Observable` reads on its own,
+// but not `@Published`) update from it. Only `manifest` and `pageContentRevision` are
+// observed.
 @MainActor
-final class LectureDocument: ObservableObject {
+@Observable
+final class LectureDocument {
 
     /// Immutable, Sendable copy handed to `fileWrapper(snapshot:existingFile:)`.
     /// Mirrors exactly the state written to disk. Explicitly `nonisolated` for the
@@ -36,19 +41,27 @@ final class LectureDocument: ObservableObject {
         var newMaterialData: [UUID: Data]
     }
 
-    // MARK: - Published state
+    // MARK: - Observed state
 
     /// Every mutation — including in-place ones like `manifest.sessions.append(…)` — marks
-    /// the document dirty. `objectWillChange` alone does NOT: see `markDirty()`.
-    @Published var manifest: LectureManifest {
+    /// the document dirty. Being observed alone does NOT: see `markDirty()`.
+    var manifest: LectureManifest {
         didSet { markDirty() }
     }
+
+    /// Goes up whenever page or thumbnail bytes change. The bytes themselves are not
+    /// observed (see "Page data" below), so a view that shows something derived from
+    /// them — "No notes yet", a page thumbnail — reads this to be updated.
+    ///
+    /// Deliberately not read by `getPageData`/`getThumbnailData` themselves: the notebook
+    /// reads page data constantly, and UIKit would then re-lay it out after every save.
+    private(set) var pageContentRevision = 0
 
     // MARK: - Live UIDocument (see LectureFile.swift)
 
     /// The `LectureFile` this model belongs to. It is the authority on where the file
     /// currently lives and on whether it has unsaved changes.
-    weak var host: UIDocument?
+    @ObservationIgnored weak var host: UIDocument?
 
     /// The file's current location. Follows the document when it is renamed or moved
     /// while open.
@@ -56,21 +69,22 @@ final class LectureDocument: ObservableObject {
 
     /// Tells the system this document has unsaved changes, so it schedules an autosave.
     ///
-    /// `objectWillChange.send()` does not do this for a `ReferenceFileDocument`: SwiftUI
-    /// learns about edits from the undo manager, and this app's manifest edits never
-    /// register undo actions — so before this existed, a lecture set up and renamed
-    /// without drawing anything was never written to disk (verified in the simulator:
-    /// no `snapshot` call, `manifest.json` left at "New Lecture" / `needsSetup`).
+    /// A change notification alone never did this: back when this was a
+    /// `ReferenceFileDocument`, SwiftUI learned about edits from the undo manager, and
+    /// this app's manifest edits never register undo actions — so before this existed, a
+    /// lecture set up and renamed without drawing anything was never written to disk
+    /// (verified in the simulator: no `snapshot` call, `manifest.json` left at
+    /// "New Lecture" / `needsSetup`).
     func markDirty() {
         guard !isLoading else { return }
         host?.updateChangeCount(.done)
     }
 
-    // MARK: - Page data (deliberately NOT @Published — see docs/document-format.md → "Autosave design")
+    // MARK: - Page data (deliberately NOT observed — see docs/document-format.md → "Autosave design")
 
     /// PaperKit markup bytes, keyed by page UUID. Mutate only through
     /// `setPageData(_:for:)` so the document is marked dirty when it matters.
-    private(set) var pageData: [UUID: Data]
+    @ObservationIgnored private(set) var pageData: [UUID: Data]
     /// Cached thumbnails (ink-only PNGs), keyed by page UUID.
     ///
     /// Stored as `<uuid>.ink.png`. Older documents have `<uuid>.thumb.jpg` files: JPEGs
@@ -78,7 +92,7 @@ final class LectureDocument: ObservableObject {
     /// the live one. Those are deliberately not read — pages without a thumbnail get
     /// one regenerated from their markup — and they drop out of the package on the
     /// next save, since `fileWrapper` rebuilds `Thumbnails/` from this dictionary.
-    private(set) var thumbnailData: [UUID: Data]
+    @ObservationIgnored private(set) var thumbnailData: [UUID: Data]
 
     private static let thumbnailSuffix = ".ink.png"
 
@@ -92,11 +106,11 @@ final class LectureDocument: ObservableObject {
     /// Bytes of materials added since the document was opened, until they are part
     /// of the package on disk. Kept for the whole session: a snapshot may be taken
     /// before or after any given save, and it must always be able to write them.
-    private var newMaterialData: [UUID: Data] = [:]
+    @ObservationIgnored private var newMaterialData: [UUID: Data] = [:]
 
     /// `Materials/` as it was when the document was opened — a fallback for reading
     /// a file and for a save that gets no `existingFile` to carry files over from.
-    private var openedMaterialWrappers: [String: FileWrapper] = [:]
+    @ObservationIgnored private var openedMaterialWrappers: [String: FileWrapper] = [:]
 
     // MARK: - Init (new document)
 
@@ -107,7 +121,7 @@ final class LectureDocument: ObservableObject {
     }
 
     /// True while `load(from:)` replaces the contents, so it doesn't count as an edit.
-    private var isLoading = false
+    @ObservationIgnored private var isLoading = false
 
     // MARK: - Reading a package from disk
 
@@ -163,9 +177,9 @@ final class LectureDocument: ObservableObject {
 
         isLoading = true
         defer { isLoading = false }
-        objectWillChange.send()
         pageData = pages
         thumbnailData = thumbs
+        pageContentRevision += 1
         openedMaterialWrappers = root.fileWrappers?["Materials"]?.fileWrappers ?? [:]
         manifest = decodedManifest
     }
@@ -247,8 +261,8 @@ final class LectureDocument: ObservableObject {
     /// This is the ONE place a markup edit becomes visible to the save system — see
     /// docs/document-format.md → "Autosave design".
     func setPageData(_ data: Data, for id: UUID) {
-        objectWillChange.send()
         pageData[id] = data
+        pageContentRevision += 1
         markDirty()
     }
 
@@ -257,8 +271,8 @@ final class LectureDocument: ObservableObject {
     }
 
     func setThumbnailData(_ data: Data, for id: UUID) {
-        objectWillChange.send()
         thumbnailData[id] = data
+        pageContentRevision += 1
         markDirty()
     }
 
@@ -333,9 +347,9 @@ final class LectureDocument: ObservableObject {
         let orphanedPages = Set(pageData.keys).subtracting(keep)
         let orphanedThumbs = Set(thumbnailData.keys).subtracting(keep)
         guard !orphanedPages.isEmpty || !orphanedThumbs.isEmpty else { return }
-        objectWillChange.send()
         for id in orphanedPages { pageData.removeValue(forKey: id) }
         for id in orphanedThumbs { thumbnailData.removeValue(forKey: id) }
+        pageContentRevision += 1
         markDirty()
     }
 }

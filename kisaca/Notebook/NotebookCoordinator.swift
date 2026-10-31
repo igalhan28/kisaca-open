@@ -2,10 +2,12 @@
 //  NotebookCoordinator.swift
 //  kisaca
 //
-//  Observable bridge between the SwiftUI toolbar (`NotebookScreen`) and the UIKit
-//  canvas (`NotebookScrollViewController`). SwiftUI observes `currentPageIndex` /
-//  `totalPages` for the page counter; toolbar actions call the methods here, which
-//  just forward to the scroll view controller.
+//  Observable state between the notebook screen's bar (`NotebookViewController`) and
+//  the canvas (`NotebookScrollViewController`). The screen observes `currentPageIndex` /
+//  `totalPages` and the rest for its bar (UIKit tracks the reads in `updateProperties`);
+//  bar actions call the methods here, which just forward to the scroll view controller.
+//  Things the screen has to present (the share sheet, the selected-text alert) come
+//  through callbacks rather than observed flags.
 //
 //  Also owns the autosave timer: periodically flushes whichever page currently has
 //  the tool picker, so a page the user sits and writes on for a long time without
@@ -24,7 +26,7 @@ import PaperKit
 @MainActor
 final class NotebookCoordinator {
 
-    // MARK: - State (observed by SwiftUI)
+    // MARK: - State (observed by NotebookViewController)
 
     var currentPageIndex: Int = 0
     var totalPages: Int = 1
@@ -37,32 +39,30 @@ final class NotebookCoordinator {
     /// notebook is filed (its week).
     var currentSessionID: UUID?
 
-    /// URL of the most recently generated PDF (consumed by the share sheet).
-    var pdfURL: URL?
-
-    /// Controls whether the share sheet is presented.
-    var isShareSheetPresented: Bool = false
-
     /// True while the PDF is being generated (drives the loading overlay).
     var isExporting: Bool = false
 
-    /// Body of the "Selected Text" alert, and what drives its presentation.
-    var selectedTextMessage: String?
-    var isSelectedTextAlertPresented: Bool = false
+    // MARK: - Presenting (set by NotebookViewController)
+
+    /// A generated PDF, ready for the share sheet.
+    @ObservationIgnored var onPDFReady: ((URL) -> Void)?
+
+    /// The "Selected Text" alert's message.
+    @ObservationIgnored var onSelectedText: ((String) -> Void)?
 
     // MARK: - Internal link to UIKit
 
-    /// Set by `NotebookHostView.makeUIViewController(context:)`.
-    weak var scrollVC: NotebookScrollViewController?
+    /// Set by `NotebookViewController`.
+    @ObservationIgnored weak var scrollVC: NotebookScrollViewController?
 
-    /// Set by `NotebookHostView.makeUIViewController(context:)`.
-    var pageRepository: PageRepository?
+    /// Set by `NotebookViewController`.
+    @ObservationIgnored var pageRepository: PageRepository?
 
     // MARK: - Autosave timer
 
-    private var autosaveTimer: Timer?
+    @ObservationIgnored private var autosaveTimer: Timer?
 
-    /// Starts the periodic flush. Call from `NotebookScreen.onAppear`.
+    /// Starts the periodic flush. Called when the notebook screen appears.
     func startAutosaveTimer(interval: TimeInterval = 8) {
         stopAutosaveTimer()
         autosaveTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
@@ -72,9 +72,8 @@ final class NotebookCoordinator {
         }
     }
 
-    /// Stops the periodic flush. Call from `NotebookScreen.onDisappear` and on
-    /// scene-phase → background/inactive (paired with an explicit `flushActivePage()`
-    /// there too).
+    /// Stops the periodic flush. Called when the notebook screen disappears (paired with
+    /// an explicit `flushActivePage()` there, and on leaving the active state).
     func stopAutosaveTimer() {
         autosaveTimer?.invalidate()
         autosaveTimer = nil
@@ -84,7 +83,7 @@ final class NotebookCoordinator {
         scrollVC?.flushActivePage()
     }
 
-    // MARK: - Actions (called by SwiftUI toolbar)
+    // MARK: - Actions (called by the notebook screen's bar)
 
     func addPage() {
         scrollVC?.addPage()
@@ -141,8 +140,7 @@ final class NotebookCoordinator {
     }
 
     private func present(_ message: String) {
-        selectedTextMessage = message
-        isSelectedTextAlertPresented = true
+        onSelectedText?(message)
     }
 
     private static func noTextMessage(reason: String, frame: CGRect) -> String {
@@ -158,10 +156,10 @@ final class NotebookCoordinator {
 
     // MARK: - PDF Export
 
-    /// Triggers async PDF generation; sets `pdfURL` and presents the share sheet when done.
+    /// Triggers async PDF generation; hands the file to `onPDFReady` when done.
     /// - Parameters:
     ///   - pageIndices: pages to include, in order. `nil` exports every page (used by
-    ///     "Export All"); a subset is used by the "Select Pages" flow (`PDFExportSheet`).
+    ///     "Export All"); a subset is used by the "Select Pages" flow (`PDFExportViewController`).
     ///   - fileName: desired PDF name (without extension), e.g. "Calculus II - Exercise
     ///     Sessions - 29.10.2026". `nil` falls back to a timestamped default.
     func generatePDF(pageIndices: [Int]? = nil, fileName: String? = nil) {
@@ -183,9 +181,8 @@ final class NotebookCoordinator {
                 pageIndices: pageIndices,
                 fileName: fileName
             )
-            pdfURL = url
             isExporting = false
-            isShareSheetPresented = true
+            onPDFReady?(url)
         }
     }
 }

@@ -183,7 +183,7 @@ final class NotebookScrollViewController: UIViewController {
         if !hasPerformedInitialLayout {
             hasPerformedInitialLayout = true
             scale = fit
-        } else if abs(scale - lastFitScale) < 0.001 {
+        } else if forcesFitWidth || abs(scale - lastFitScale) < 0.001 {
             // Was sitting exactly at fit-to-width; stay there across a rotation or
             // split-view resize instead of drifting to an arbitrary zoom.
             scale = fit
@@ -235,8 +235,15 @@ final class NotebookScrollViewController: UIViewController {
         return scrollView.bounds.width / docContentSize.width
     }
 
-    private var minScale: CGFloat { fitToWidthScale * 0.35 }
-    private var maxScale: CGFloat { fitToWidthScale * 4 }
+    /// The "Always Fit Page to Width" preference. Pinning both zoom limits to fit
+    /// is all it takes: the scroll view then has no room to pinch, and every layout
+    /// pass snaps `scale` back to fit.
+    private var forcesFitWidth: Bool {
+        UserDefaults.standard.bool(forKey: AppPreferences.Key.notebookFitsWidth)
+    }
+
+    private var minScale: CGFloat { fitToWidthScale * (forcesFitWidth ? 1 : 0.35) }
+    private var maxScale: CGFloat { fitToWidthScale * (forcesFitWidth ? 1 : 4) }
 
     private func docPageRect(at index: Int) -> CGRect {
         CGRect(
@@ -336,6 +343,8 @@ final class NotebookScrollViewController: UIViewController {
         scrollView.contentSize = scaledContentSize
         scrollView.minimumZoomScale = minScale / scale
         scrollView.maximumZoomScale = maxScale / scale
+        // With the zoom pinned, a pinch would otherwise still rubber-band.
+        scrollView.bouncesZoom = !forcesFitWidth
         // Before restoring the offset, not after — the offset clamp reads the insets
         // this sets.
         centerContent()

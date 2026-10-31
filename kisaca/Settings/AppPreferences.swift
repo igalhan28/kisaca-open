@@ -7,10 +7,9 @@
 //  survive closing and reopening the app, are not synced to other devices through the
 //  lecture file, and apply to every lecture alike.
 //
-//  There is no settings screen yet (not in the MVP). This file is where one will read
-//  and write — every key and default is defined here once, and views bind to them with
-//  `@AppStorage(AppPreferences.Key.…)`, so a settings screen added later changes
-//  behaviour everywhere without touching the views that use them.
+//  Every key and default is defined here once. The Settings form
+//  (`LibrarySettingsView`, SwiftUI) binds to them with `@AppStorage`; the notebook
+//  (`NotebookViewController`, UIKit) reads and writes them through `UserDefaults`.
 //
 
 import Foundation
@@ -21,6 +20,9 @@ enum AppPreferences {
         static let materialPaneSide = "materialPaneSide"
         /// `Double` — the material pane's share of the notebook screen's width.
         static let materialPaneFraction = "materialPaneFraction"
+        /// `Bool` — keep notebook pages fitted to the screen's width, with pinch zoom off.
+        /// Only the notebook; the material pane keeps its own zoom.
+        static let notebookFitsWidth = "notebookFitsWidth"
     }
 
     static let defaultMaterialPaneFraction = 0.42

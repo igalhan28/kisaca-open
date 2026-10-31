@@ -2,9 +2,10 @@
 //  LectureSetupView.swift
 //  kisaca
 //
-//  Shown once, in place of the whole app, for a freshly-created document
-//  (`document.manifest.needsSetup == true`) — see ContentView.swift and
-//  ARCHITECTURE.md → Phase 2.
+//  Shown once, in place of the lecture's home screen, for a freshly-created document
+//  (`document.manifest.needsSetup == true`). `AppCoordinator` pushes it in a
+//  `UIHostingController` and swaps it for the home screen once "Create" is tapped. One of
+//  the forms that stays SwiftUI for now (docs/uikit-migration.md → Phase 5).
 //
 //  Covers everything the project brief asks for at lecture-creation time:
 //  the lecture name, the sections (recommended defaults + custom, editable inline,
@@ -16,17 +17,16 @@
 //  in ARCHITECTURE.md as a place to revisit for polish, not a functional gap.
 //
 //  The name typed here is the lecture's *only* name: "Create" hands it to
-//  `ContentView.applyLectureName`, which also renames the document's file to match —
-//  it is not a second, parallel name alongside the file's. This view no longer brings
-//  its own NavigationStack either; ContentView owns the app's single one.
+//  `LectureFileSync.applyLectureName`, which also renames the document's file to match —
+//  it is not a second, parallel name alongside the file's.
 //
 
 import SwiftUI
 
 struct LectureSetupView: View {
-    @ObservedObject var document: LectureDocument
-    /// Pre-fill for the name field — the file's own name when the user already chose
-    /// one in the document browser, otherwise empty. See ContentView.
+    let document: LectureDocument
+    /// Pre-fill for the name field — the file's own name when it already has a real one,
+    /// otherwise empty. See `LectureFileSync.suggestedSetupName`.
     var initialName: String = ""
     /// Sets the lecture name *and* renames the document file to match.
     var onCommitName: (String) -> Void

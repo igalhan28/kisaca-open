@@ -43,20 +43,12 @@ final class MaterialPreviewer: NSObject {
         self.onDismiss = onDismiss
     }
 
-    /// Presents full screen from the top-most view controller of the key window.
-    func present() {
+    /// Presents full screen from `presenter` (the Materials list).
+    func present(from presenter: UIViewController) {
         let controller = QLPreviewController()
         controller.dataSource = self
         controller.delegate = self
-        guard
-            let root = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .flatMap(\.windows)
-                .first(where: \.isKeyWindow)?.rootViewController
-        else { return }
-        var top = root
-        while let presented = top.presentedViewController { top = presented }
-        top.present(controller, animated: true)
+        presenter.present(controller, animated: true)
     }
 }
 

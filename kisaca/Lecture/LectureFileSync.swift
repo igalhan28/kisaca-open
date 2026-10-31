@@ -1,64 +1,70 @@
 //
-//  LectureScreen.swift
+//  LectureFileSync.swift
 //  kisaca
 //
-//  Root of one open lecture, pushed onto the app's navigation stack from the home
-//  screen (LibraryHomeView). Routes between the one-time setup flow and the
-//  Lecture → Section → Session navigation, and is the single funnel for the
-//  lecture's name, keeping `manifest.name` and the file name equal in both
-//  directions. See DocumentNaming.swift and docs/naming.md.
+//  The single funnel for an open lecture's name, keeping `manifest.name` and the file
+//  name equal in both directions (docs/naming.md), plus the other things that follow the
+//  file while the lecture is on screen: iCloud conflicts (`DocumentConflictResolver`)
+//  and saving when the app goes to the background.
+//
+//  One per open lecture, kept by `AppCoordinator` while the lecture's screens are on
+//  the navigation stack — shared by the setup form and the lecture's home screen, so
+//  it outlives the switch from one to the other. Was `LectureScreen` (a SwiftUI view)
+//  before the UIKit migration (docs/uikit-migration.md).
 //
 
-import SwiftUI
 import UIKit
 
-struct LectureScreen: View {
-    @ObservedObject var document: LectureDocument
+final class LectureFileSync {
+    let document: LectureDocument
     let file: LectureFile
 
-    @Environment(\.scenePhase) private var scenePhase
-
     /// The name a rename is currently moving the file to; non-nil only while that
-    /// coordinated move is in flight. It de-duplicates the commit SwiftUI's renameable
-    /// title fires twice per rename, and keeps `reconcileNameWithFile()` from reading a
-    /// half-moved file and reverting the name.
-    @State private var renamingTo: String?
+    /// coordinated move is in flight. It de-duplicates a rename committed twice, and
+    /// keeps `reconcileNameWithFile()` from reading a half-moved file and reverting the
+    /// name.
+    private var renamingTo: String?
+    private var observers: [NSObjectProtocol] = []
 
     /// Where the file is right now — `UIDocument` follows it when it moves.
     private var currentFileURL: URL? { document.liveFileURL }
 
-    var body: some View {
-        Group {
-            if document.manifest.needsSetup {
-                LectureSetupView(
-                    document: document,
-                    initialName: suggestedSetupName,
-                    onCommitName: applyLectureName
-                )
-            } else {
-                LectureHomeView(
-                    document: document,
-                    onRename: applyLectureName
-                )
-            }
-        }
-        .onAppear {
-            reconcileNameWithFile()
-            DocumentConflictResolver.resolveIfNeeded(file)
-        }
+    init(document: LectureDocument, file: LectureFile) {
+        self.document = document
+        self.file = file
+
+        let center = NotificationCenter.default
         // Files (or another device, through iCloud) can move the file behind our back;
         // `UIDocument` posts a state change when it does. A conflict can also arrive
         // while the lecture is open — iCloud syncing a change made elsewhere.
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIDocument.stateChangedNotification, object: file)
-        ) { _ in
-            reconcileNameWithFile()
-            DocumentConflictResolver.resolveIfNeeded(file)
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { reconcileNameWithFile() }
-            if phase == .background { file.autosave(completionHandler: nil) }
-        }
+        observers.append(
+            center.addObserver(
+                forName: UIDocument.stateChangedNotification, object: file, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.fileStateChanged() }
+            })
+        observers.append(
+            center.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main)
+            { [weak self] _ in
+                MainActor.assumeIsolated { self?.reconcileNameWithFile() }
+            })
+        observers.append(
+            center.addObserver(
+                forName: UIScene.didEnterBackgroundNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.file.autosave(completionHandler: nil) }
+            })
+
+        fileStateChanged()
+    }
+
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    private func fileStateChanged() {
+        reconcileNameWithFile()
+        DocumentConflictResolver.resolveIfNeeded(file)
     }
 
     // MARK: - Name sync
@@ -68,9 +74,9 @@ struct LectureScreen: View {
 
     /// file name → lecture name. Runs on open, when the app becomes active again, and
     /// whenever the file moves (someone renamed it in Files, or on another device — the
-    /// name they can see wins). Deliberately skipped while `needsSetup` is true, so
-    /// a placeholder "Untitled" never becomes the lecture's real name.
-    private func reconcileNameWithFile() {
+    /// name they can see wins). Deliberately skipped while `needsSetup` is true, so a
+    /// placeholder "Untitled" never becomes the lecture's real name.
+    func reconcileNameWithFile() {
         guard renamingTo == nil, !document.manifest.needsSetup, let url = currentFileURL
         else { return }
         // While a move is in progress `fileURL` may still hold the old location.
@@ -88,7 +94,7 @@ struct LectureScreen: View {
     /// changed it (illegal characters replaced, " 2" added on a collision). If the
     /// rename fails, the name falls back to the file's real name instead of staying
     /// different from it.
-    private func applyLectureName(_ newName: String) {
+    func applyLectureName(_ newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, renamingTo != trimmed else { return }
 
@@ -135,7 +141,7 @@ struct LectureScreen: View {
 
     /// What the setup form's name field starts out with: the file's name if it already
     /// has a real one, otherwise empty (never "Untitled").
-    private var suggestedSetupName: String {
+    var suggestedSetupName: String {
         let manifestName = document.manifest.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !manifestName.isEmpty, manifestName != LectureManifest().name {
             return manifestName

@@ -439,6 +439,11 @@ final class LectureLibrary {
             if let coordinationError { throw coordinationError }
             if let deleteError { throw deleteError }
         }.value
+        // Also forget the file in what the last scans found: the iCloud query hasn't
+        // reported the deletion yet, and rebuilding from its stale results brought the
+        // lecture straight back as "This file couldn't be read."
+        iCloudFound.removeValue(forKey: url)
+        localFound.removeValue(forKey: url)
         entries.removeAll { $0.url == url }
         refresh()
     }

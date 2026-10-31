@@ -12,8 +12,15 @@ struct LibrarySettingsView: View {
     @Environment(LectureLibrary.self) private var library
     @Environment(\.dismiss) private var dismiss
 
+    /// Reports how tall the form's content is, so the presenting sheet can hug it
+    /// instead of leaving empty space under the last section.
+    var onContentHeightChange: (CGFloat) -> Void = { _ in }
+
     @AppStorage(AppPreferences.Key.materialPaneSide)
     private var paneSideRaw = MaterialPaneSide.default.rawValue
+
+    @AppStorage(AppPreferences.Key.notebookFitsWidth)
+    private var notebookFitsWidth = false
 
     @State private var isMoving = false
     @State private var moveResult: String?
@@ -54,7 +61,13 @@ struct LibrarySettingsView: View {
                         Text("Left").tag(MaterialPaneSide.leading.rawValue)
                         Text("Right").tag(MaterialPaneSide.trailing.rawValue)
                     }
+                    Toggle("Fit Notebook Page to Width", isOn: $notebookFitsWidth)
                 }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
+            } action: { _, height in
+                onContentHeightChange(height)
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
