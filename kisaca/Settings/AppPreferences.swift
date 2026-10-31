@@ -20,6 +20,9 @@ enum AppPreferences {
         static let materialPaneSide = "materialPaneSide"
         /// `Double` — the material pane's share of the notebook screen's width.
         static let materialPaneFraction = "materialPaneFraction"
+        /// `Bool` — keep notebook pages fitted to the screen's width, with pinch zoom off.
+        /// Only the notebook; the material pane keeps its own zoom.
+        static let notebookFitsWidth = "notebookFitsWidth"
     }
 
     static let defaultMaterialPaneFraction = 0.42
