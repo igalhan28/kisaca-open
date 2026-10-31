@@ -7,7 +7,8 @@
 //  how wide it is are device preferences (`AppPreferences`).
 //
 //  PDFs (the common case: scripts, exercise sheets) open in PDFKit — continuous scroll,
-//  pinch zoom, text selection. Anything else (slides, images, documents) opens in an
+//  pinch zoom, text selection — at the page they were last left on
+//  (`MaterialReadingPosition`). Anything else (slides, images, documents) opens in an
 //  embedded Quick Look view. Markup is deliberately not offered here: it is Quick Look's
 //  full-screen feature, reached from the Materials list (`MaterialPreviewer`), and the
 //  pencil on this screen belongs to the notebook.
@@ -227,13 +228,10 @@ final class MaterialPaneViewController: UIViewController {
         case (.picker, _):
             install(makePicker())
             applyPickerSnapshot(materials)
-        case (.pdf, .pdf(let pdf)):
-            let pdfView = PDFView()
-            pdfView.displayMode = .singlePageContinuous
-            pdfView.displayDirection = .vertical
-            pdfView.autoScales = true
+        case (.pdf(let id), .pdf(let pdf)):
+            // Opens where this PDF was last left, here or full screen.
+            let pdfView = ResumingPDFView(document: pdf, materialID: id)
             pdfView.backgroundColor = .secondarySystemBackground
-            pdfView.document = pdf
             install(pdfView)
         case (.file, .file(let url)):
             quickLookSource.url = url

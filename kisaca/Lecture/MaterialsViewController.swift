@@ -16,6 +16,7 @@
 //  Storage and why the bytes are not kept in memory: `LectureDocument` → Materials.
 //
 
+import PDFKit
 import UIKit
 import UniformTypeIdentifiers
 
@@ -267,6 +268,7 @@ final class MaterialsViewController: UICollectionViewController {
         alert.addAction(
             UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
                 self?.document.removeMaterial(withID: id)
+                MaterialReadingPosition.forget(id)
             })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         present(alert, animated: true)
@@ -297,7 +299,8 @@ final class MaterialsViewController: UICollectionViewController {
 
     /// Writes the file under its original name to a temporary folder and hands it to
     /// Quick Look — which needs a file URL, and shows that name in its title and when
-    /// sharing. Read-only — see `MaterialPreviewer`.
+    /// sharing. PDFs open in PDFKit instead, at the page they were left on. Read-only —
+    /// see `MaterialPreviewer`.
     private func open(_ material: CourseMaterial) {
         guard openingID == nil else { return }
         openingID = material.id
@@ -309,6 +312,11 @@ final class MaterialsViewController: UICollectionViewController {
             }
             do {
                 let url = try MaterialFiles.temporaryCopy(of: material, data: data)
+                if material.contentType?.conforms(to: .pdf) == true, let pdf = PDFDocument(data: data) {
+                    MaterialPDFReaderViewController(material: material, document: pdf, fileURL: url)
+                        .present(from: self)
+                    return
+                }
                 let previewer = MaterialPreviewer(fileURL: url, onDismiss: { [weak self] in self?.previewer = nil })
                 self.previewer = previewer
                 previewer.present(from: self)

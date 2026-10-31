@@ -160,19 +160,19 @@ final class PageRepository {
     /// crashing or losing the rest of the session).
     func loadMarkup(forPageAt index: Int) -> PaperMarkup {
         guard index >= 0, index < pageIDs.count else {
-            return PaperMarkup(bounds: PageGeometry.a4Bounds)
+            return .blankPage()
         }
         let id = pageIDs[index]
         // A save still encoding holds newer ink than the document does.
         if let pending = pendingSaves[id] { return pending.markup }
         guard let data = document.getPageData(for: id) else {
-            return PaperMarkup(bounds: PageGeometry.a4Bounds)
+            return .blankPage()
         }
         do {
             return try PaperMarkup(dataRepresentation: data)
         } catch {
             print("[PageRepository] Failed to decode page \(id): \(error)")
-            return PaperMarkup(bounds: PageGeometry.a4Bounds)
+            return .blankPage()
         }
     }
 
@@ -221,9 +221,12 @@ final class PageRepository {
     /// PNG, not JPEG: a thumbnail is ink only, on transparency, and is laid *over* the
     /// tile's live grid — so the grid stays sharp at every zoom instead of being
     /// baked into the image at one resolution.
-    func saveThumbnail(_ image: UIImage, for pageID: UUID) {
+    ///
+    /// Takes the encoded bytes rather than the image: encoding is done off the main
+    /// thread, by `PageRenderer.renderThumbnail`.
+    func saveThumbnail(png data: Data, for pageID: UUID) {
         // A thumbnail render can finish after its page was deleted.
-        guard pageIDs.contains(pageID), let data = image.pngData() else { return }
+        guard pageIDs.contains(pageID) else { return }
         document.setThumbnailData(data, for: pageID)
     }
 
@@ -234,17 +237,11 @@ final class PageRepository {
         guard index >= 0, index < pageIDs.count else { return nil }
         let id = pageIDs[index]
         guard document.getPageData(for: id) != nil || pendingSaves[id] != nil,
-            let image = await PageRenderer.renderInk(
-                loadMarkup(forPageAt: index), scale: Self.thumbnailScale, whiteBackground: false)
+            let thumbnail = await PageRenderer.renderThumbnail(loadMarkup(forPageAt: index))
         else { return nil }
-        saveThumbnail(image, for: id)
-        return image
+        saveThumbnail(png: thumbnail.png, for: id)
+        return thumbnail.image
     }
-
-    /// Pixels per page point for regenerated thumbnails — about what a snapshot of a
-    /// fit-to-width page on an iPad comes out at. Also the cap on live snapshots — see
-    /// `PageCanvasController.renderSnapshot()`.
-    static let thumbnailScale: CGFloat = 2.5
 
     /// Downsampled while decoding, never decoded at full size: documents saved before
     /// snapshots were capped can hold thumbnails taken at deep zoom, which decode to
@@ -253,7 +250,7 @@ final class PageRepository {
         guard let data = document.getThumbnailData(for: pageID),
             let source = CGImageSourceCreateWithData(data as CFData, nil)
         else { return nil }
-        let maxPixels = PageGeometry.a4Size.height * Self.thumbnailScale
+        let maxPixels = PageGeometry.a4Size.height * PageRenderer.thumbnailScale
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,

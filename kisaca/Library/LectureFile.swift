@@ -25,6 +25,9 @@ final class LectureFile: UIDocument, @unchecked Sendable {
     /// the main thread.
     nonisolated(unsafe) private var diskWrapper: FileWrapper?
 
+    /// Why the last load failed, if it did — `open()` only reports a `Bool`. Main thread only.
+    nonisolated(unsafe) private(set) var loadError: (any Error)?
+
     @MainActor
     init(url: URL) {
         model = LectureDocument()
@@ -39,13 +42,23 @@ final class LectureFile: UIDocument, @unchecked Sendable {
         // Handed over, not shared: UIKit doesn't touch it again after this call.
         nonisolated(unsafe) let wrapper = contents
         try Self.onMain {
-            try model.load(from: wrapper)
+            do {
+                try model.load(from: wrapper)
+            } catch {
+                loadError = error
+                throw error
+            }
+            loadError = nil
             diskWrapper = wrapper
         }
     }
 
     override func contents(forType typeName: String) throws -> Any {
         try Self.onMain {
+            // A newer build saved this file while it was open here (an iCloud update
+            // this build couldn't load): writing the old in-memory state back would
+            // overwrite that newer work.
+            if let error = loadError as? LectureFormatError { throw error }
             let wrapper = try model.fileWrapper(snapshot: model.snapshot(), existingFile: diskWrapper)
             diskWrapper = wrapper
             return wrapper

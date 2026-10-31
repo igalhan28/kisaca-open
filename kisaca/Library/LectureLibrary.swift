@@ -338,6 +338,7 @@ final class LectureLibrary {
         }
         let file = LectureFile(url: url)
         guard await file.open() else {
+            if let error = file.loadError as? LectureFormatError { throw error }
             throw LibraryError.couldNotOpen(DocumentNaming.lectureName(fromFileURL: url))
         }
         let lecture = OpenLecture(file: file)

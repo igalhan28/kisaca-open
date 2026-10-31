@@ -140,6 +140,20 @@ final class NotebookScrollViewController: UIViewController {
 
         scrollView.delegate = self
         scrollView.alwaysBounceVertical = true
+        // Fingers scroll and zoom; the Pencil only ever writes. Left at their defaults
+        // the scroll view's pan and pinch also accept Pencil touches, so every stroke
+        // starts as a contest between them and PaperKit's drawing recogniser — and a
+        // stroke that moves first along the scroll axis can be taken as a scroll.
+        // `PKCanvasView` does exactly this for its own scroll view under its
+        // `.pencilOnly` drawing policy. The pinch recogniser only exists once zooming
+        // is possible, so `rebuildGeometry` restricts that one.
+        scrollView.panGestureRecognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
+        // Gesture recognisers see touches at once either way; this only stops the
+        // scroll view holding back `touchesBegan` from the views inside it for its
+        // ~150 ms "is this a scroll?" wait.
+        scrollView.delaysContentTouches = false
         scrollView.contentInsetAdjustmentBehavior = .always
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scrollView)
@@ -345,6 +359,9 @@ final class NotebookScrollViewController: UIViewController {
         scrollView.maximumZoomScale = maxScale / scale
         // With the zoom pinned, a pinch would otherwise still rubber-band.
         scrollView.bouncesZoom = !forcesFitWidth
+        scrollView.pinchGestureRecognizer?.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
         // Before restoring the offset, not after — the offset clamp reads the insets
         // this sets.
         centerContent()
@@ -480,6 +497,12 @@ final class NotebookScrollViewController: UIViewController {
                 tile.canvasWindow = nil
                 continue
             }
+            // Ink written while the canvas covered the whole page never reached the
+            // thumbnail (see `scheduleThumbnailRefresh`), and from here on the
+            // thumbnail is what shows outside the window.
+            if tile.canvasWindow == nil, let canvas = tile.canvas {
+                refreshThumbnail(for: canvas)
+            }
             let toPage = CGAffineTransform(scaleX: 1 / pageScale, y: 1 / pageScale)
             func inPage(_ rect: CGRect) -> CGRect {
                 scrollView.convert(rect, to: tile).applying(toPage)
@@ -604,7 +627,12 @@ final class NotebookScrollViewController: UIViewController {
             canvas.detachToolPicker(toolPicker)
             activeCanvas = nil
         }
-        tile.detachCanvas()
+        // `flush` runs first and starts the thumbnail render, so a stale thumbnail
+        // means one is on its way; until it lands, a snapshot stands in.
+        let thumbnailIsStale =
+            canvas.needsThumbnail
+            || canvas.pageID.map { renderingThumbnails.contains($0) } == true
+        tile.detachCanvas(keepingInk: thumbnailIsStale)
         canvasPool.append(canvas)
     }
 
@@ -641,8 +669,15 @@ final class NotebookScrollViewController: UIViewController {
         canvas.attachToolPicker(toolPicker)
     }
 
+    /// Only the touch-down matters. The recogniser is then cancelled — toggling
+    /// `isEnabled` does that — so it doesn't keep tracking, and calling back for, every
+    /// move of a stroke. It doesn't cancel touches in the view, so nothing else
+    /// notices.
     @objc private func notebookTouched(_ recognizer: UIGestureRecognizer) {
-        if recognizer.state == .began { reclaimToolPicker() }
+        guard recognizer.state == .began else { return }
+        reclaimToolPicker()
+        recognizer.isEnabled = false
+        recognizer.isEnabled = true
     }
 
     private func updatePageCounter() {
@@ -660,9 +695,15 @@ final class NotebookScrollViewController: UIViewController {
 
     // MARK: - Save / thumbnail
 
+    /// Hands the canvas's ink to the repository if it changed since the last flush,
+    /// and refreshes its thumbnail if that is stale. A page nobody wrote on costs
+    /// nothing.
     private func flush(_ canvas: PageCanvasController) {
-        guard let pageID = canvas.pageID, let markup = canvas.latestMarkup else { return }
-        repository.saveMarkup(markup, forPageID: pageID)
+        guard let pageID = canvas.pageID else { return }
+        if canvas.hasUnsavedInk, let markup = canvas.currentMarkup {
+            canvas.hasUnsavedInk = false
+            repository.saveMarkup(markup, forPageID: pageID)
+        }
         refreshThumbnail(for: canvas)
     }
 
@@ -672,26 +713,40 @@ final class NotebookScrollViewController: UIViewController {
     private func refreshThumbnail(for canvas: PageCanvasController) {
         guard canvas.needsThumbnail, let pageID = canvas.pageID else { return }
         canvas.needsThumbnail = false
+        renderingThumbnails.insert(pageID)
         Task { [weak self] in
-            guard let image = await canvas.renderThumbnail(), let self else { return }
-            repository.saveThumbnail(image, for: pageID)
-            if let index = repository.pageIDs.firstIndex(of: pageID) {
-                tiles[index]?.thumbnail = image
+            let thumbnail = await canvas.renderThumbnail()
+            guard let self else { return }
+            renderingThumbnails.remove(pageID)
+            let tile = repository.pageIDs.firstIndex(of: pageID).flatMap { self.tiles[$0] }
+            guard let thumbnail else {
+                tile?.removeInkPlaceholder()
+                return
             }
+            repository.saveThumbnail(png: thumbnail.png, for: pageID)
+            tile?.thumbnail = thumbnail.image
         }
     }
 
     private var pendingThumbnailRefreshes: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    /// Keeps the thumbnail no more than a moment behind the ink. Zoomed in, the
-    /// thumbnail is what shows outside the canvas's window, so ink written a moment ago
-    /// has to be in it before that part of the page can scroll out of the window.
+    /// Pages whose ink is being rendered into a thumbnail right now.
+    private var renderingThumbnails: Set<UUID> = []
+
+    /// Keeps the thumbnail no more than a moment behind the ink — but only while it
+    /// can be seen. Zoomed in, the thumbnail is what shows outside the canvas's window,
+    /// so ink written a moment ago has to be in it before that part of the page can
+    /// scroll out of the window. At ordinary zoom the canvas covers the whole page and
+    /// the thumbnail is hidden under it: re-rendering it after every pause in writing
+    /// was pure cost, landing just as the next word began. Those pages get their
+    /// thumbnail when they are flushed (autosave, scrolling away, closing).
     /// Debounced: rendering after every stroke of a fast-writing hand is wasted work.
     private func scheduleThumbnailRefresh(for canvas: PageCanvasController) {
+        guard let index = canvas.pageIndex, tiles[index]?.canvasWindow != nil else { return }
         let key = ObjectIdentifier(canvas)
         pendingThumbnailRefreshes[key]?.cancel()
         pendingThumbnailRefreshes[key] = Task { [weak self, weak canvas] in
-            try? await Task.sleep(for: .milliseconds(600))
+            try? await Task.sleep(for: .milliseconds(1500))
             guard !Task.isCancelled, let self, let canvas else { return }
             pendingThumbnailRefreshes[key] = nil
             refreshThumbnail(for: canvas)
@@ -705,7 +760,14 @@ final class NotebookScrollViewController: UIViewController {
         flush(canvas)
     }
 
-    var activeMarkup: PaperMarkup? { activeCanvas?.latestMarkup }
+    /// The autosave timer's flush: same as `flushActivePage`, except that it never
+    /// runs in the middle of a stroke — the next tick picks the page up instead.
+    func autosaveActivePage() {
+        guard let canvas = activeCanvas, !canvas.isDrawing else { return }
+        flush(canvas)
+    }
+
+    var activeMarkup: PaperMarkup? { activeCanvas?.currentMarkup }
 
     /// The selection on the page that currently holds the tool picker, or `nil` when
     /// nothing is selected there. Only the active canvas is consulted: it is the only

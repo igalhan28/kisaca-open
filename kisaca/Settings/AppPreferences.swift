@@ -23,6 +23,9 @@ enum AppPreferences {
         /// `Bool` — keep notebook pages fitted to the screen's width, with pinch zoom off.
         /// Only the notebook; the material pane keeps its own zoom.
         static let notebookFitsWidth = "notebookFitsWidth"
+        /// JSON `[material ID: MaterialReadingPosition]` — where each PDF was left off.
+        /// Not a setting; it lives here so every key is in one place.
+        static let materialReadingPositions = "materialReadingPositions"
     }
 
     static let defaultMaterialPaneFraction = 0.42

@@ -138,10 +138,16 @@ final class NotebookViewController: UIViewController {
         pageCounterLabel.font = UIFont.monospacedDigitSystemFont(
             ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .regular)
         navigationItem.leftItemsSupplementBackButton = true
-        navigationItem.leftBarButtonItems = [
-            paneItem, addMaterialItem, addPageItem, pageCounterItem, deletePageItem,
-        ]
-        navigationItem.rightBarButtonItems = [moreItem, undoItem, exportItem, selectedTextItem]
+        if PageCanvasController.isEditingAvailable {
+            navigationItem.leftBarButtonItems = [
+                paneItem, addMaterialItem, addPageItem, pageCounterItem, deletePageItem,
+            ]
+            navigationItem.rightBarButtonItems = [moreItem, undoItem, exportItem, selectedTextItem]
+        } else {
+            // iPhone reads notes, it doesn't write them: nothing that changes pages.
+            navigationItem.leftBarButtonItems = [paneItem, addMaterialItem, pageCounterItem]
+            navigationItem.rightBarButtonItems = [exportItem]
+        }
 
         coordinator.onPDFReady = { [weak self] url in self?.share(url) }
         coordinator.onSelectedText = { [weak self] message in

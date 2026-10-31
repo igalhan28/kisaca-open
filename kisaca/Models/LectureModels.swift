@@ -307,8 +307,22 @@ nonisolated struct CourseMaterial: Codable, Identifiable, Hashable {
 
 /// The full persisted state of one lecture document (`manifest.json`).
 nonisolated struct LectureManifest: Codable {
-    /// Bump if the on-disk shape changes in a way old files can't decode directly.
-    var schemaVersion: Int = 1
+    /// The package format this build reads and writes. See docs/document-format.md →
+    /// "Format versions" for what each number added.
+    ///
+    /// - 1: everything up to 2026-10-31 (no `minimumReaderVersion`).
+    /// - 2: new pages' ink is in a 1.6× larger markup space (`PageGeometry.inkScale`).
+    ///   A version-1 build would show only the top-left part of such a page.
+    static let currentFormatVersion = 2
+
+    /// The format version of the build that last saved this file. Informational —
+    /// `minimumReaderVersion` is what decides whether a build may open it.
+    var schemaVersion: Int = currentFormatVersion
+    /// The oldest format version a build must support to open this file without
+    /// misreading or losing anything. Absent in version-1 files. Raise it (and
+    /// `currentFormatVersion`) only for changes an older build would get wrong; an
+    /// addition older builds can safely ignore needs no bump.
+    var minimumReaderVersion: Int?
 
     var name: String
     /// Optional accent color name (SwiftUI `Color` name), reserved for future theming.

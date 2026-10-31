@@ -68,7 +68,7 @@ final class NotebookCoordinator {
         autosaveTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
             [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in self.flushActivePage() }
+            Task { @MainActor in self.scrollVC?.autosaveActivePage() }
         }
     }
 

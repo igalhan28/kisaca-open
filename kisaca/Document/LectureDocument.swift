@@ -139,6 +139,15 @@ final class LectureDocument {
         else {
             throw CocoaError(.fileReadCorruptFile)
         }
+        // Checked before the full decode: a newer format may not decode at all, and one
+        // that does could lose whatever this build doesn't know about on the next save.
+        struct FormatHeader: Decodable { var minimumReaderVersion: Int? }
+        let header = try? JSONDecoder().decode(FormatHeader.self, from: manifestData)
+        if let required = header?.minimumReaderVersion,
+            required > LectureManifest.currentFormatVersion
+        {
+            throw LectureFormatError.needsNewerApp
+        }
         var decodedManifest = try JSONDecoder().decode(LectureManifest.self, from: manifestData)
 
         var pages: [UUID: Data] = [:]
@@ -200,7 +209,11 @@ final class LectureDocument {
     func fileWrapper(snapshot: Snapshot, existingFile: FileWrapper?) throws -> FileWrapper {
         let root = FileWrapper(directoryWithFileWrappers: [:])
 
-        let manifestData = try JSONEncoder().encode(snapshot.manifest)
+        // Whatever version the file had, it is now written by this build.
+        var manifest = snapshot.manifest
+        manifest.schemaVersion = LectureManifest.currentFormatVersion
+        manifest.minimumReaderVersion = LectureManifest.currentFormatVersion
+        let manifestData = try JSONEncoder().encode(manifest)
         root.addRegularFile(withContents: manifestData, preferredFilename: "manifest.json")
 
         let existingPages = existingFile?.fileWrappers?["Pages"]?.fileWrappers ?? [:]
@@ -351,5 +364,14 @@ final class LectureDocument {
         for id in orphanedThumbs { thumbnailData.removeValue(forKey: id) }
         pageContentRevision += 1
         markDirty()
+    }
+}
+
+/// A lecture saved in a format this build doesn't support.
+enum LectureFormatError: LocalizedError {
+    case needsNewerApp
+
+    var errorDescription: String? {
+        "This lecture was saved by a newer version of KISACA. Update the app to open it."
     }
 }

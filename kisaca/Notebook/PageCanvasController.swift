@@ -19,16 +19,60 @@ import UIKit
 @MainActor
 final class PageCanvasController: UIViewController {
 
+    /// Whether pages can be written on at all. Not on iPhone: there is no Apple Pencil
+    /// for it, and the notebook is pencil-only (see `restrictInternalGestures`), so an
+    /// iPhone shows the notes read-only — no tool picker, no editing.
+    static let isEditingAvailable = UIDevice.current.userInterfaceIdiom != .phone
+
+    /// The touches that may edit a page. Apple Pencil only — except in the simulator,
+    /// which has no Pencil: there a mouse drag arrives as a finger touch, and without it
+    /// ink could not be smoke-tested at all (docs/notebook-canvas.md).
+    private static let editingTouchTypes: [NSNumber] = {
+        #if targetEnvironment(simulator)
+            [UITouch.TouchType.pencil, .direct].map { NSNumber(value: $0.rawValue) }
+        #else
+            [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        #endif
+    }()
+
     /// `nil` until the first `configure(...)` call.
     private(set) var pageIndex: Int?
     private(set) var pageID: UUID?
 
     private var paperVC: PaperMarkupViewController!
 
-    /// Freshest markup for whatever page this slot currently shows, kept in sync via
-    /// the delegate callback — PaperKit doesn't always update `paperVC.markup`
-    /// synchronously after every stroke.
-    private(set) var latestMarkup: PaperMarkup?
+    /// Markup points per page point for the page this slot shows — 1 for pages from
+    /// before `PageGeometry.inkScale`. `visiblePageRect` is in page points; PaperKit is
+    /// told the same rectangle in markup points.
+    private var inkScale: CGFloat = PageGeometry.inkScale
+
+    /// The markup of whatever page this slot currently shows.
+    ///
+    /// Read on demand — when saving, rendering a thumbnail or exporting — not copied
+    /// out after every stroke. The getter hands back a whole-page value built from
+    /// PaperKit's live model, and the delegate callback that used to read it fires on
+    /// the main thread at the end of every stroke, which is right when the next one is
+    /// about to start.
+    var currentMarkup: PaperMarkup? { paperVC.markup }
+
+    /// Whether the ink changed since it was last handed to the repository. Lets the
+    /// autosave timer skip a page nobody touched — before, every tick re-encoded the
+    /// page and marked the document dirty, so `UIDocument` wrote the package every few
+    /// seconds while the user wrote.
+    var hasUnsavedInk = false
+
+    /// When the stroke in progress began, `nil` between strokes. PaperKit reports a
+    /// stroke's start (`didBeginDrawing`) and, once it is committed, a markup change.
+    private var strokeBeganAt: Date?
+
+    /// Whether the pencil is on the page right now — periodic work (the autosave
+    /// flush) waits for the stroke to end instead of competing with it for the main
+    /// thread. Times out, so a stroke whose end PaperKit never reports can't hold
+    /// autosave off for good.
+    var isDrawing: Bool {
+        guard let began = strokeBeganAt else { return false }
+        return Date().timeIntervalSince(began) < 10
+    }
 
     /// The last selection that actually contained something, kept because the live
     /// `paperVC.selectedMarkup` can be cleared out from under us: tapping a toolbar
@@ -64,7 +108,7 @@ final class PageCanvasController: UIViewController {
             fitPassesForCurrentSize = 0
             view.setNeedsLayout()
             fitA4InViewport(animated: false)
-            disableInternalZoomGestures()
+            restrictInternalGestures()
         }
     }
 
@@ -83,7 +127,7 @@ final class PageCanvasController: UIViewController {
         // loop turn before this is ever actually displayed, so there's no visible
         // flash of blank content.
         let vc = PaperMarkupViewController(
-            markup: PaperMarkup(bounds: PageGeometry.a4Bounds), supportedFeatureSet: .latest)
+            markup: .blankPage(), supportedFeatureSet: .latest)
         // Deliberately wide, and NOT user-facing zoom. `zoomRange` is the range of
         // scales PaperKit is allowed to render its content at — and making a 595pt
         // page fill a tile that is currently, say, 2400pt wide *is* a 4x render
@@ -98,9 +142,12 @@ final class PageCanvasController: UIViewController {
         vc.zoomRange = 0.1...16.0
         // Finger doesn't draw — it scrolls and pinches, like every PDF viewer and
         // like Notability. Drawing is Apple Pencil's job. Without this the outer
-        // scroll view would be fighting PaperKit for every touch.
+        // scroll view would be fighting PaperKit for every touch. `.selection` alone
+        // still lets a finger select and move ink; `restrictInternalGestures` takes
+        // that away too, so editing of any kind is Pencil only.
         vc.directTouchMode = .selection
         vc.directTouchAutomaticallyDraws = false
+        vc.isEditable = Self.isEditingAvailable
         vc.overrideUserInterfaceStyle = .light  // Page is always white paper — fixes the loupe background.
 
         // Transparent: the paper and its grid belong to the tile underneath
@@ -108,7 +155,7 @@ final class PageCanvasController: UIViewController {
         // size the page is shown. The grid used to live here, and PaperKit magnifies
         // its content view as a bitmap — that is what made it blurry. This view is
         // kept only to give PaperKit its page-sized content.
-        let page = UIView(frame: PageGeometry.a4Bounds)
+        let page = UIView(frame: PageGeometry.newMarkupBounds)
         page.backgroundColor = .clear
         page.isUserInteractionEnabled = false
         vc.contentView = page
@@ -138,7 +185,7 @@ final class PageCanvasController: UIViewController {
         view.addSubview(vc.view)
         vc.view.frame = view.bounds
         vc.didMove(toParent: self)
-        disableInternalZoomGestures()
+        restrictInternalGestures()
     }
 
     /// The size `sizePaperVCToFillPage` last settled against, and how many passes it
@@ -204,7 +251,7 @@ final class PageCanvasController: UIViewController {
         let visible = paperVC.contentVisibleFrame
         let overshoot =
             visible.width > 0
-            ? min(max(visible.width / visiblePageRect.width, 1), 1.5)
+            ? min(max(visible.width / (visiblePageRect.width * inkScale), 1), 1.5)
             : 1
         let target = CGSize(
             width: view.bounds.width * overshoot,
@@ -228,22 +275,32 @@ final class PageCanvasController: UIViewController {
     /// zoomed page (`visiblePageRect`) there is, and they took every finger pan —
     /// scrolling the page *inside* the canvas instead of the notebook.
     ///
+    /// Every other recogniser — drawing, lasso, tapping or dragging a selection,
+    /// editing a text box — is limited to Apple Pencil. `directTouchMode` has no "finger
+    /// does nothing" setting (only `.drawing` or `.selection`), so this is what makes
+    /// editing Pencil-only: a finger touch never reaches PaperKit and goes to the outer
+    /// scroll view, which scrolls and zooms.
+    ///
     /// These are ordinary public `UIGestureRecognizer` and `UIScrollView` objects
     /// reached through the view hierarchy; no private API is touched. If some future
     /// PaperKit stops installing them, this finds none and quietly does nothing.
-    private func disableInternalZoomGestures() {
-        func disable(in root: UIView) {
-            for recognizer in root.gestureRecognizers ?? []
-            where recognizer is UIPinchGestureRecognizer {
-                recognizer.isEnabled = false
+    private func restrictInternalGestures() {
+        let editingTouchTypes = Self.editingTouchTypes
+        func restrict(in root: UIView) {
+            for recognizer in root.gestureRecognizers ?? [] {
+                if recognizer is UIPinchGestureRecognizer {
+                    recognizer.isEnabled = false
+                } else if recognizer.allowedTouchTypes != editingTouchTypes {
+                    recognizer.allowedTouchTypes = editingTouchTypes
+                }
             }
             if let scrollView = root as? UIScrollView, scrollView.isScrollEnabled {
                 scrollView.isScrollEnabled = false
             }
-            root.subviews.forEach(disable)
+            root.subviews.forEach(restrict)
         }
         guard let paperVC else { return }
-        disable(in: paperVC.view)
+        restrict(in: paperVC.view)
     }
 
     // MARK: - Configure (reuse entry point)
@@ -252,10 +309,11 @@ final class PageCanvasController: UIViewController {
     func configure(pageIndex: Int, pageID: UUID, markup: PaperMarkup) {
         self.pageIndex = pageIndex
         self.pageID = pageID
-        paperVC.markup = markup
-        latestMarkup = markup
+        show(markup)
         lastNonEmptySelection = nil
         needsThumbnail = false
+        hasUnsavedInk = false
+        strokeBeganAt = nil
         // A pooled canvas is often handed a tile of exactly the size it just left, so
         // the budget below would still be spent from the previous page and this one
         // would never get its fit passes.
@@ -263,7 +321,17 @@ final class PageCanvasController: UIViewController {
         fitA4InViewport(animated: false)
         // Recognisers can be installed lazily, so re-run this whenever the slot is
         // repointed rather than trusting the single pass in `viewDidLoad`.
-        disableInternalZoomGestures()
+        restrictInternalGestures()
+    }
+
+    /// Hands `markup` to PaperKit along with its coordinate space: old and new pages
+    /// differ in size (see `PageGeometry.inkScale`), and a pooled slot shows both.
+    private func show(_ markup: PaperMarkup) {
+        paperVC.markup = markup
+        inkScale = markup.inkScale
+        paperVC.contentView?.frame = markup.bounds
+        fitPassesForCurrentSize = 0
+        fitA4InViewport(animated: false)
     }
 
     /// The page this slot shows moved to `index` — pages were added or removed before it.
@@ -302,7 +370,7 @@ final class PageCanvasController: UIViewController {
         guard let vc = paperVC, !isApplyingVisibleFrame else { return false }
         guard view.bounds.width > 0, view.bounds.height > 0 else { return false }
 
-        let target = visiblePageRect
+        let target = visiblePageRect.applying(CGAffineTransform(scaleX: inkScale, y: inkScale))
         let current = vc.contentVisibleFrame
         let tolerance: CGFloat = 0.5
         guard abs(current.minX - target.minX) > tolerance
@@ -329,6 +397,7 @@ final class PageCanvasController: UIViewController {
     /// *changes*, and a pooled canvas otherwise keeps whatever tool it last had — the
     /// picker showing red while the page drew black, until something was re-picked.
     func attachToolPicker(_ toolPicker: PKToolPicker) {
+        guard Self.isEditingAvailable else { return }
         paperVC.drawingTool = toolPicker.selectedTool
         toolPicker.addObserver(paperVC)
         paperVC.pencilKitResponderState.activeToolPicker = toolPicker
@@ -362,18 +431,19 @@ final class PageCanvasController: UIViewController {
     // MARK: - Clear / Undo
 
     func clear() {
-        let oldMarkup = latestMarkup ?? paperVC.markup
+        let oldMarkup = paperVC.markup
         paperVC.undoManager?.registerUndo(withTarget: self) { target in
-            target.paperVC.markup = oldMarkup
-            target.latestMarkup = oldMarkup
-            target.needsThumbnail = true
-            target.onInkChanged?()
+            target.show(oldMarkup ?? .blankPage())
+            target.inkDidChange()
         }
         paperVC.undoManager?.setActionName("Clear")
 
-        let blank = PaperMarkup(bounds: PageGeometry.a4Bounds)
-        paperVC.markup = blank
-        latestMarkup = blank
+        show(.blankPage())
+        inkDidChange()
+    }
+
+    private func inkDidChange() {
+        hasUnsavedInk = true
         needsThumbnail = true
         onInkChanged?()
     }
@@ -389,10 +459,12 @@ final class PageCanvasController: UIViewController {
     /// than snapshotted from the view — the view may show only part of the page (see
     /// `visiblePageRect`), and a markup render has a fixed pixel size whatever the
     /// zoom, where a snapshot of a deeply zoomed page ran to a gigabyte.
-    func renderThumbnail() async -> UIImage? {
-        guard let markup = latestMarkup else { return nil }
-        return await PageRenderer.renderInk(
-            markup, scale: PageRepository.thumbnailScale, whiteBackground: false)
+    ///
+    /// Only the markup is read here, on the main thread; rendering and encoding run in
+    /// the background (`PageRenderer.renderThumbnail`).
+    func renderThumbnail() async -> (image: UIImage, png: Data)? {
+        guard let markup = currentMarkup else { return nil }
+        return await PageRenderer.renderThumbnail(markup)
     }
 }
 
@@ -404,18 +476,21 @@ extension PageCanvasController: @preconcurrency PaperMarkupViewController.Delega
     func paperMarkupViewControllerDidChangeMarkup(
         _ paperMarkupViewController: PaperMarkupViewController
     ) {
-        latestMarkup = paperMarkupViewController.markup
-        needsThumbnail = true
-        onInkChanged?()
+        strokeBeganAt = nil
+        inkDidChange()
     }
 
     func paperMarkupViewControllerDidBeginDrawing(
         _ paperMarkupViewController: PaperMarkupViewController
-    ) {}
+    ) {
+        strokeBeganAt = Date()
+    }
 
     func paperMarkupViewControllerDidChangeSelection(
         _ paperMarkupViewController: PaperMarkupViewController
     ) {
+        // A selection brings its own handles and drag recognisers; keep them Pencil-only.
+        restrictInternalGestures()
         let selection = paperMarkupViewController.selectedMarkup
         guard selection.hasContent else { return }
         lastNonEmptySelection = selection
@@ -427,7 +502,7 @@ extension PageCanvasController: @preconcurrency PaperMarkupViewController.Delega
     /// always exactly the page, and zoom lives in the outer scroll view. But
     /// `zoomRange` has to stay wide for the page to *render* at the tile's size (see
     /// `viewDidLoad`), which leaves PaperKit's own pinch recognisers armed;
-    /// `disableInternalZoomGestures` switches off the ones it can find, and PaperKit
+    /// `restrictInternalGestures` switches off the ones it can find, and PaperKit
     /// installs them lazily, so a fast gesture can still get through to one. When it
     /// does, the page's ink and grid end up drawn at a scale the tile doesn't share
     /// — "the grid squares suddenly got much bigger" — and nothing corrected it until
@@ -440,7 +515,7 @@ extension PageCanvasController: @preconcurrency PaperMarkupViewController.Delega
     ) {
         if fitA4InViewport(animated: false) {
             // Whatever recogniser did that is one this canvas has not disabled yet.
-            disableInternalZoomGestures()
+            restrictInternalGestures()
         }
     }
 }

@@ -19,7 +19,15 @@ enum PageRenderer {
     /// Renders `markup`'s ink at `scale` pixels per page point. With `whiteBackground`
     /// the image is opaque white paper (for JPEG thumbnails); without, everything but
     /// the ink is transparent (for drawing over a vector grid in a PDF).
-    static func renderInk(
+    ///
+    /// Runs off the main thread, always. `PaperMarkup.draw(in:frame:)` is
+    /// `nonisolated(nonsending)` — it runs on whatever actor calls it — so while this
+    /// type was main-actor-bound, a whole-page render ran on the main thread. The
+    /// notebook re-renders a page's thumbnail shortly after the pen pauses, which put
+    /// tens of milliseconds of main-thread work right where the next stroke begins:
+    /// Pencil touches queue up behind it and the stroke's first segment lags.
+    @concurrent
+    nonisolated static func renderInk(
         _ markup: PaperMarkup, scale: CGFloat, whiteBackground: Bool
     ) async -> UIImage? {
         let bounds = PageGeometry.a4Bounds
@@ -44,10 +52,31 @@ enum PageRenderer {
             ctx.setFillColor(UIColor.white.cgColor)
             ctx.fill(bounds)
         }
-        await markup.draw(in: ctx, frame: bounds)
+        // The markup has its own coordinate space (see `PageGeometry.inkScale`).
+        let inkScale = markup.inkScale
+        ctx.scaleBy(x: 1 / inkScale, y: 1 / inkScale)
+        await markup.draw(in: ctx, frame: markup.bounds)
 
         return ctx.makeImage().map { UIImage(cgImage: $0) }
     }
+
+    /// A page thumbnail: the ink render plus its PNG bytes, both made off the main
+    /// thread — PNG-encoding a page-sized image is as slow as rendering it.
+    @concurrent
+    nonisolated static func renderThumbnail(_ markup: PaperMarkup) async -> (
+        image: UIImage, png: Data
+    )? {
+        guard
+            let image = await renderInk(
+                markup, scale: thumbnailScale, whiteBackground: false),
+            let png = image.pngData()
+        else { return nil }
+        return (image, png)
+    }
+
+    /// Pixels per page point for thumbnails — about what a fit-to-width page on an
+    /// iPad comes out at.
+    nonisolated static let thumbnailScale: CGFloat = 2.5
 
     /// Draws the page grid as vector lines, in page points, into `ctx` — used for
     /// the PDF, where vector lines stay sharp at any zoom in any PDF viewer.

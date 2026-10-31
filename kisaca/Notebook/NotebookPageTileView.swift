@@ -42,6 +42,16 @@ final class NotebookPageTileView: UIView {
     /// While the live canvas fades in over the thumbnail, the thumbnail stays whole.
     private var isFadingInCanvas = false
 
+    /// A snapshot of a canvas that just left this tile, shown until the thumbnail
+    /// catches up with it — with the part of the page it covers, in page points.
+    ///
+    /// Thumbnails are not re-rendered while the user writes on a page whose canvas
+    /// covers all of it (that render used to cost the main thread a frame or more,
+    /// right as the next stroke began), so when the canvas goes the thumbnail can be
+    /// missing the latest ink until a fresh one is rendered. The snapshot is a
+    /// render-server copy of what was on screen: no drawing, nearly free.
+    private var inkPlaceholder: (view: UIView, pageRect: CGRect)?
+
     /// Cuts the canvas's area out of the thumbnail, so the two never both draw ink.
     private let thumbnailMask: CAShapeLayer = {
         let mask = CAShapeLayer()
@@ -93,6 +103,10 @@ final class NotebookPageTileView: UIView {
         // layout is fine: the grid draws nothing for a scale it can't use.
         let pageScale = inner.width / PageGeometry.a4Size.width
         grid.pageScale = pageScale
+        if let placeholder = inkPlaceholder {
+            placeholder.view.frame = placeholder.pageRect.applying(
+                CGAffineTransform(scaleX: pageScale, y: pageScale))
+        }
         layoutCanvas(pageScale: pageScale)
 
         // An explicit shadow path: without one, Core Animation derives the shadow
@@ -133,13 +147,17 @@ final class NotebookPageTileView: UIView {
     /// The thumbnail shows wherever the canvas doesn't: nowhere when the canvas
     /// covers the whole page, everywhere but the canvas's frame when it covers a window.
     private func updateThumbnailMask() {
-        guard let canvas, !isFadingInCanvas else {
+        let covered: CGRect
+        if let canvas, !isFadingInCanvas {
+            covered = canvas.view.frame
+        } else if canvas == nil, let placeholder = inkPlaceholder {
+            covered = placeholder.view.frame
+        } else {
             thumbnailView.isHidden = false
             thumbnailView.layer.mask = nil
             return
         }
         let bounds = thumbnailView.bounds
-        let covered = canvas.view.frame
         if covered.contains(bounds.insetBy(dx: 0.5, dy: 0.5)) {
             thumbnailView.isHidden = true
             thumbnailView.layer.mask = nil
@@ -162,9 +180,21 @@ final class NotebookPageTileView: UIView {
         set { grid.spacing = newValue }
     }
 
+    /// Setting it also retires the snapshot left by a departed canvas: a thumbnail
+    /// arriving after the canvas left is the render that snapshot was waiting for.
     var thumbnail: UIImage? {
         get { thumbnailView.image }
-        set { thumbnailView.image = newValue }
+        set {
+            thumbnailView.image = newValue
+            removeInkPlaceholder()
+        }
+    }
+
+    func removeInkPlaceholder() {
+        guard let placeholder = inkPlaceholder else { return }
+        placeholder.view.removeFromSuperview()
+        inkPlaceholder = nil
+        updateThumbnailMask()
     }
 
     /// How long the live canvas takes to replace the thumbnail underneath it.
@@ -183,6 +213,7 @@ final class NotebookPageTileView: UIView {
     /// changing size — is a hard visual cut, and it lands exactly where the user's
     /// attention already is.
     func attach(_ canvas: PageCanvasController, animated: Bool) {
+        removeInkPlaceholder()
         self.canvas = canvas
         canvas.view.alpha = 1
         pageContainer.addSubview(canvas.view)
@@ -213,9 +244,20 @@ final class NotebookPageTileView: UIView {
             })
     }
 
+    /// `keepingInk` leaves a snapshot of the canvas in its place until the next
+    /// thumbnail arrives — for a canvas whose ink the thumbnail doesn't have yet.
     @discardableResult
-    func detachCanvas() -> PageCanvasController? {
+    func detachCanvas(keepingInk: Bool = false) -> PageCanvasController? {
         let detached = canvas
+        if keepingInk, let detached, !isFadingInCanvas,
+            let snapshot = detached.view.snapshotView(afterScreenUpdates: false)
+        {
+            inkPlaceholder?.view.removeFromSuperview()
+            snapshot.isUserInteractionEnabled = false
+            snapshot.frame = detached.view.frame
+            pageContainer.insertSubview(snapshot, aboveSubview: thumbnailView)
+            inkPlaceholder = (snapshot, detached.visiblePageRect)
+        }
         detached?.view.layer.removeAllAnimations()
         detached?.view.alpha = 1
         detached?.view.removeFromSuperview()
