@@ -2,7 +2,7 @@
 //  NotebookViewController.swift
 //  kisaca
 //
-//  The note-taking screen: the notebook canvas (`NotebookScrollViewController`, a child)
+//  The note-taking screen: the notebook canvas (`NotebookPagerViewController`, a child)
 //  for one `LectureSession` — or a whole section read as one notebook — and the bar
 //  around it (page counter, add/delete page, undo, clear, export). Sits one level below
 //  Section in the Lecture → Section → Session navigation. Replaced the SwiftUI
@@ -12,11 +12,20 @@
 //  Course material can open beside the notebook (the split button): see
 //  `MaterialPaneViewController` and "Material pane" below.
 //
+//  No navigation bar (2026-11-09): back and the split button float on the notebook's
+//  own top-left corner, so they stay on the page side when material is open beside
+//  it, and the tools are the rail down the notebook's leading edge (`ToolRailView`)
+//  and the tool disk (`ToolDiskView`, two-finger sideways swipe) instead of the system
+//  tool picker. A finger tap anywhere on the page hides all of it, the
+//  status bar and the home indicator too, for a clean page — tap again to bring it
+//  back. See "Chrome" below.
+//
 //  Owns the autosave timer's lifecycle (start on appear, flush + stop on disappear or
 //  when the app leaves the active state) — see NotebookCoordinator.swift and
 //  docs/document-format.md → "Autosave design".
 //
 
+import PaperKit
 import UIKit
 import UniformTypeIdentifiers
 
@@ -24,17 +33,30 @@ final class NotebookViewController: UIViewController {
     private let document: LectureDocument
     private let route: NotebookRoute
     private let coordinator = NotebookCoordinator()
-    private let notebook: NotebookScrollViewController
+    private let notebook: NotebookPagerViewController
+
+    // MARK: - Chrome
+    //
+    // The corner buttons and the tool rail float over the notebook; `chromeHidden`
+    // fades them (and the status bar and home indicator) out.
+
+    private let toolbox = NotebookToolbox()
+    private lazy var rail = ToolRailView { [weak self] action in self?.perform(action) }
+    private var disk: ToolDiskView?
+    private let cornerGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+    private var chromeHidden = false
+    private var showsRail: Bool { PageCanvasController.isEditingAvailable }
 
     init(document: LectureDocument, route: NotebookRoute) {
         self.document = document
         self.route = route
         let repository = PageRepository(document: document, scope: route.scope)
-        notebook = NotebookScrollViewController(repository: repository, coordinator: coordinator)
+        notebook = NotebookPagerViewController(repository: repository, coordinator: coordinator)
         notebook.initialPageIndex = route.initialSessionID.flatMap {
             repository.firstPageIndex(of: $0)
         }
-        coordinator.scrollVC = notebook
+        notebook.toolbox = toolbox
+        coordinator.pager = notebook
         coordinator.pageRepository = repository
         coordinator.currentPageIndex = 0
         coordinator.totalPages = repository.pageCount
@@ -65,45 +87,65 @@ final class NotebookViewController: UIViewController {
 
     private static let dividerWidth: CGFloat = 14
 
-    // MARK: - Bar
+    // MARK: - Corner buttons
 
-    private lazy var paneItem = UIBarButtonItem(
-        title: "Open Material Beside Notes", image: UIImage(systemName: "rectangle.split.2x1"),
-        primaryAction: UIAction { [weak self] _ in self?.toggleMaterialPane() })
-    // Quick add: files land under this session's week and open beside the notes.
-    private lazy var addMaterialItem = UIBarButtonItem(
-        title: "Add Material", image: UIImage(systemName: "paperclip.badge.plus"),
-        primaryAction: UIAction { [weak self] _ in self?.showMaterialImporter() })
-    // Adds after the current page; deletes the current page. Moving between pages is
-    // scrolling — there are no previous/next buttons.
-    private lazy var addPageItem = UIBarButtonItem(
-        title: "Add Page", image: UIImage(systemName: "plus.rectangle.portrait"),
-        primaryAction: UIAction { [weak self] _ in self?.coordinator.addPage() })
-    private let pageCounterLabel = UILabel()
-    private lazy var pageCounterItem = UIBarButtonItem(customView: pageCounterLabel)
-    private lazy var deletePageItem = UIBarButtonItem(
-        title: "Delete Page", image: UIImage(systemName: "minus.rectangle.portrait"),
-        primaryAction: UIAction { [weak self] _ in self?.confirmDeletePage() })
-    // Stands in for "Search the Web for Selection". It can't live in PaperKit's own
-    // long-press menu next to "Copy as Text" — that menu takes no custom items — so it
-    // sits here and reads the selection off the canvas itself. See
-    // `NotebookCoordinator.showSelectedText()`.
-    private lazy var selectedTextItem = UIBarButtonItem(
-        title: "Selected Text", image: UIImage(systemName: "text.magnifyingglass"),
-        primaryAction: UIAction { [weak self] _ in self?.coordinator.showSelectedText() })
-    private lazy var exportItem = UIBarButtonItem(
-        title: "Export", image: UIImage(systemName: "square.and.arrow.up"),
-        primaryAction: UIAction { [weak self] _ in self?.showExportOptions() })
-    private lazy var undoItem = UIBarButtonItem(
-        title: "Undo", image: UIImage(systemName: "arrow.uturn.backward"),
-        primaryAction: UIAction { [weak self] _ in self?.coordinator.undo() })
-    private lazy var moreItem = UIBarButtonItem(
-        title: "More", image: UIImage(systemName: "ellipsis.circle"), primaryAction: nil,
-        menu: UIMenu(children: [
-            UIAction(
-                title: "Clear Page", image: UIImage(systemName: "trash"), attributes: .destructive
-            ) { [weak self] _ in self?.coordinator.clear() }
-        ]))
+    private lazy var paneButton = cornerButton(
+        "rectangle.split.2x1", label: "Open Material Beside Notes"
+    ) { [weak self] in self?.toggleMaterialPane() }
+    private lazy var backButton = cornerButton("chevron.backward", label: "Back") { [weak self] in
+        self?.navigationController?.popViewController(animated: true)
+    }
+
+    private func cornerButton(_ symbol: String, label: String, action: @escaping () -> Void)
+        -> UIButton
+    {
+        var configuration = UIButton.Configuration.plain()
+        configuration.image = UIImage(systemName: symbol)
+        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 19, weight: .medium)
+        configuration.baseForegroundColor = .label
+        let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
+        button.accessibilityLabel = label
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 48),
+            button.heightAnchor.constraint(equalToConstant: 48),
+        ])
+        return button
+    }
+//    // Quick add: files land under this session's week and open beside the notes.
+//    private lazy var addMaterialItem = UIBarButtonItem(
+//        title: "Add Material", image: UIImage(systemName: "paperclip.badge.plus"),
+//        primaryAction: UIAction { [weak self] _ in self?.showMaterialImporter() })
+//    // Adds after the current page; deletes the current page. Moving between pages is
+//    // scrolling — there are no previous/next buttons.
+//    private lazy var addPageItem = UIBarButtonItem(
+//        title: "Add Page", image: UIImage(systemName: "plus.rectangle.portrait"),
+//        primaryAction: UIAction { [weak self] _ in self?.coordinator.addPage() })
+//    private let pageCounterLabel = UILabel()
+//    private lazy var pageCounterItem = UIBarButtonItem(customView: pageCounterLabel)
+//    private lazy var deletePageItem = UIBarButtonItem(
+//        title: "Delete Page", image: UIImage(systemName: "minus.rectangle.portrait"),
+//        primaryAction: UIAction { [weak self] _ in self?.confirmDeletePage() })
+//    // Stands in for "Search the Web for Selection". It can't live in PaperKit's own
+//    // long-press menu next to "Copy as Text" — that menu takes no custom items — so it
+//    // sits here and reads the selection off the canvas itself. See
+//    // `NotebookCoordinator.showSelectedText()`.
+//    private lazy var selectedTextItem = UIBarButtonItem(
+//        title: "Selected Text", image: UIImage(systemName: "text.magnifyingglass"),
+//        primaryAction: UIAction { [weak self] _ in self?.coordinator.showSelectedText() })
+//    private lazy var exportItem = UIBarButtonItem(
+//        title: "Export", image: UIImage(systemName: "square.and.arrow.up"),
+//        primaryAction: UIAction { [weak self] _ in self?.showExportOptions() })
+//    private lazy var undoItem = UIBarButtonItem(
+//        title: "Undo", image: UIImage(systemName: "arrow.uturn.backward"),
+//        primaryAction: UIAction { [weak self] _ in self?.coordinator.undo() })
+//    private lazy var moreItem = UIBarButtonItem(
+//        title: "More", image: UIImage(systemName: "ellipsis.circle"), primaryAction: nil,
+//        menu: UIMenu(children: [
+//            UIAction(
+//                title: "Clear Page", image: UIImage(systemName: "trash"), attributes: .destructive
+//            ) { [weak self] _ in self?.coordinator.clear() }
+//        ]))
 
     private let exportOverlay = ExportingOverlay()
 
@@ -128,26 +170,28 @@ final class NotebookViewController: UIViewController {
         dragIndicator.isHidden = true
         view.addSubview(dragIndicator)
 
+        setUpChrome()
+
         exportOverlay.frame = view.bounds
         exportOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         exportOverlay.isHidden = true
         view.addSubview(exportOverlay)
 
-        // Compact: next to a long title ("Lectures · W12 · Thu") a "Page 5 of 23" label
-        // gets truncated, so the counter is just "5 / 23".
-        pageCounterLabel.font = UIFont.monospacedDigitSystemFont(
-            ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .regular)
-        navigationItem.leftItemsSupplementBackButton = true
-        if PageCanvasController.isEditingAvailable {
-            navigationItem.leftBarButtonItems = [
-                paneItem, addMaterialItem, addPageItem, pageCounterItem, deletePageItem,
-            ]
-            navigationItem.rightBarButtonItems = [moreItem, undoItem, exportItem, selectedTextItem]
-        } else {
-            // iPhone reads notes, it doesn't write them: nothing that changes pages.
-            navigationItem.leftBarButtonItems = [paneItem, addMaterialItem, pageCounterItem]
-            navigationItem.rightBarButtonItems = [exportItem]
-        }
+//        // Compact: next to a long title ("Lectures · W12 · Thu") a "Page 5 of 23" label
+//        // gets truncated, so the counter is just "5 / 23".
+//        pageCounterLabel.font = UIFont.monospacedDigitSystemFont(
+//            ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .regular)
+//        navigationItem.leftItemsSupplementBackButton = true
+//        if PageCanvasController.isEditingAvailable {
+//            navigationItem.leftBarButtonItems = [
+//                paneItem, addMaterialItem, addPageItem, pageCounterItem, deletePageItem,
+//            ]
+//            navigationItem.rightBarButtonItems = [moreItem, undoItem, exportItem, selectedTextItem]
+//        } else {
+//            // iPhone reads notes, it doesn't write them: nothing that changes pages.
+//            navigationItem.leftBarButtonItems = [paneItem, addMaterialItem, pageCounterItem]
+//            navigationItem.rightBarButtonItems = [exportItem]
+//        }
 
         coordinator.onPDFReady = { [weak self] url in self?.share(url) }
         coordinator.onSelectedText = { [weak self] message in
@@ -166,8 +210,18 @@ final class NotebookViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: animated)
         coordinator.startAutosaveTimer()
     }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: animated)
+    }
+
+    override var prefersStatusBarHidden: Bool { chromeHidden }
+    override var prefersHomeIndicatorAutoHidden: Bool { chromeHidden }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
@@ -182,20 +236,21 @@ final class NotebookViewController: UIViewController {
     /// Everything the bar shows. Reads the coordinator and the document, so UIKit calls
     /// this again whenever the page, the session or the export state changes.
     override func updateProperties() {
-        super.updateProperties()
-        navigationItem.title = notebookTitle
-
-        let page = coordinator.currentPageIndex + 1
-        pageCounterLabel.text = "\(page) / \(coordinator.totalPages)"
-        pageCounterLabel.accessibilityLabel = "Page \(page) of \(coordinator.totalPages)"
-        pageCounterLabel.sizeToFit()
-        deletePageItem.isEnabled = coordinator.canDeleteCurrentPage
-
-        paneItem.title = showingMaterialPane ? "Hide Material" : "Open Material Beside Notes"
-        paneItem.image = UIImage(
+//        super.updateProperties()
+//        navigationItem.title = notebookTitle
+//
+//        let page = coordinator.currentPageIndex + 1
+//        pageCounterLabel.text = "\(page) / \(coordinator.totalPages)"
+//        pageCounterLabel.accessibilityLabel = "Page \(page) of \(coordinator.totalPages)"
+//        pageCounterLabel.sizeToFit()
+//        deletePageItem.isEnabled = coordinator.canDeleteCurrentPage
+//
+        paneButton.accessibilityLabel =
+            showingMaterialPane ? "Hide Material" : "Open Material Beside Notes"
+        paneButton.configuration?.image = UIImage(
             systemName: showingMaterialPane ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
-
-        exportOverlay.isHidden = !coordinator.isExporting
+//
+//        exportOverlay.isHidden = !coordinator.isExporting
     }
 
     /// "W3 · Mon" for one session; "Lectures · W3 · Mon" for a whole section, where the
@@ -227,6 +282,11 @@ final class NotebookViewController: UIViewController {
     /// The notebook covers the full height (it scrolls under the bars); the pane sits
     /// in the safe area, and the divider runs from under the top bar to the bottom edge.
     private func layoutSplit() {
+        placeNotebookAndPane()
+        layoutChrome()
+    }
+
+    private func placeNotebookAndPane() {
         let bounds = view.bounds
         guard let pane = inlinePane else {
             notebook.view.frame = bounds
@@ -254,6 +314,164 @@ final class NotebookViewController: UIViewController {
                 x: rest + Self.dividerWidth, y: safe.top, width: paneWidth, height: paneHeight)
         }
         divider.isHidden = false
+    }
+}
+
+// MARK: - Chrome: corner buttons, rail, disk, tap to hide
+
+extension NotebookViewController: UIGestureRecognizerDelegate {
+    private func setUpChrome() {
+        let stack = UIStackView(arrangedSubviews: [backButton, paneButton])
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        cornerGlass.cornerConfiguration = .capsule()
+        cornerGlass.contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: cornerGlass.contentView.topAnchor, constant: 4),
+            stack.bottomAnchor.constraint(equalTo: cornerGlass.contentView.bottomAnchor, constant: -4),
+            stack.leadingAnchor.constraint(equalTo: cornerGlass.contentView.leadingAnchor, constant: 4),
+            stack.trailingAnchor.constraint(equalTo: cornerGlass.contentView.trailingAnchor, constant: -4),
+        ])
+        view.addSubview(cornerGlass)
+
+        rail.isHidden = !showsRail
+        view.addSubview(rail)
+
+        toolbox.observe { [weak self] _ in
+            self?.notebook.activateCurrentPage()
+            self?.refreshTools()
+        }
+        notebook.onUndoStateChange = { [weak self] in self?.refreshTools() }
+
+        // A finger tap on the page: hide / show the chrome.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(pageTapped(_:)))
+        tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        notebook.view.addGestureRecognizer(tap)
+
+        // Two fingers swiped sideways: the tool disk.
+        guard showsRail else { return }
+        for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
+            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(twoFingerSwipe(_:)))
+            swipe.direction = direction
+            swipe.numberOfTouchesRequired = 2
+            swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+            swipe.cancelsTouchesInView = false
+            swipe.delegate = self
+            notebook.view.addGestureRecognizer(swipe)
+        }
+        // The Pencil's double-tap and squeeze are the hidden system tool picker's
+        // (`PageCanvasController.activate`); the pager carries what they change into the
+        // toolbox.
+    }
+
+    private func layoutChrome() {
+        let notebookFrame = notebook.view.frame
+        let safe = view.safeAreaInsets
+        let corner = cornerGlass.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        cornerGlass.frame = CGRect(
+            x: notebookFrame.minX + 10, y: safe.top + 10, width: corner.width, height: corner.height)
+
+        let top = cornerGlass.frame.maxY + 10
+        let available = view.bounds.height - safe.bottom - 10 - top
+        let height = min(rail.contentHeight, max(available, 0))
+        // Centred under the corner buttons' back button.
+        rail.frame = CGRect(
+            x: cornerGlass.frame.minX + 4 + 24 - ToolRailView.width / 2, y: top,
+            width: ToolRailView.width, height: height)
+        notebook.leadingObstruction =
+            showsRail && !chromeHidden ? rail.frame.maxX - notebookFrame.minX : 0
+    }
+
+    private func setChromeHidden(_ hidden: Bool) {
+        guard hidden != chromeHidden else { return }
+        chromeHidden = hidden
+        let chrome: [UIView] = showsRail ? [cornerGlass, rail] : [cornerGlass]
+        if !hidden { chrome.forEach { $0.isHidden = false } }
+        UIView.animate(withDuration: 0.25) {
+            chrome.forEach { $0.alpha = hidden ? 0 : 1 }
+            self.setNeedsStatusBarAppearanceUpdate()
+        } completion: { _ in
+            if self.chromeHidden { chrome.forEach { $0.isHidden = true } }
+        }
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        view.setNeedsLayout()
+    }
+
+    @objc private func pageTapped(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        setChromeHidden(!chromeHidden)
+    }
+
+    @objc private func twoFingerSwipe(_ recognizer: UISwipeGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        toggleDisk()
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Zoomed in, two fingers pan the page sideways.
+        guard gestureRecognizer is UISwipeGestureRecognizer else { return true }
+        return !(notebook.currentCanvas?.isZoomedIn ?? false)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { true }
+
+    // MARK: Tools
+
+    private func refreshTools() {
+        let canUndo = notebook.canUndo
+        let canRedo = notebook.canRedo
+        rail.controls.show(toolbox, canUndo: canUndo, canRedo: canRedo)
+        disk?.controls.show(toolbox, canUndo: canUndo, canRedo: canRedo)
+    }
+
+    private func perform(_ action: NotebookToolAction) {
+        switch action {
+        case .select(let kind): toolbox.select(kind)
+        case .color(let color): toolbox.setColor(color)
+        case .width(let level): toolbox.setWidthLevel(level)
+        case .ruler: toolbox.isRulerActive.toggle()
+        case .insert(let source): showInsertMenu(from: source)
+        case .undo: coordinator.undo()
+        case .redo: coordinator.redo()
+        }
+    }
+
+    /// PaperKit's own insert menu — shapes, lines, text box — added to the page on
+    /// screen. Anchored where the button was, also when that was on the disk, which
+    /// closes first.
+    private func showInsertMenu(from source: UIView) {
+        guard let canvas = notebook.currentCanvas else { return }
+        let anchor = source.convert(source.bounds, to: view)
+        disk?.dismiss()
+        let menu = MarkupEditViewController(supportedFeatureSet: .latest, additionalActions: [])
+        menu.delegate = canvas
+        menu.modalPresentationStyle = .popover
+        menu.popoverPresentationController?.sourceView = view
+        menu.popoverPresentationController?.sourceRect = anchor
+        present(menu, animated: true)
+    }
+
+    private func toggleDisk() {
+        if let disk {
+            disk.dismiss()
+            return
+        }
+        let disk = ToolDiskView { [weak self] action in self?.perform(action) }
+        disk.onDismiss = { [weak self, weak disk] in
+            if self?.disk === disk { self?.disk = nil }
+            self?.coordinator.reclaimFocus()
+        }
+        disk.frame = notebook.view.frame
+        disk.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.insertSubview(disk, belowSubview: exportOverlay)
+        self.disk = disk
+        refreshTools()
+        disk.present()
     }
 }
 
@@ -363,7 +581,7 @@ extension NotebookViewController {
         }
         let finish = { [weak self] in
             completion()
-            self?.coordinator.reclaimToolPicker()
+            self?.coordinator.reclaimFocus()
         }
         guard animated else {
             update()
@@ -384,7 +602,7 @@ extension NotebookViewController {
         pane.onClose = { [weak self] in self?.setMaterialPaneShown(false) }
         pane.onAdd = { [weak self] in self?.showMaterialImporter() }
         if inline {
-            pane.onContentShown = { [weak self] in self?.coordinator.reclaimToolPicker() }
+            pane.onContentShown = { [weak self] in self?.coordinator.reclaimFocus() }
         }
         return pane
     }
@@ -451,7 +669,7 @@ extension NotebookViewController: UIAdaptivePresentationControllerDelegate {
         sheetPane = nil
         showingMaterialPane = false
         setNeedsUpdateProperties()
-        coordinator.reclaimToolPicker()
+        coordinator.reclaimFocus()
     }
 }
 
@@ -483,7 +701,7 @@ extension NotebookViewController {
     /// iPad requires (it crashes without a source).
     private func share(_ url: URL) {
         let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        activity.popoverPresentationController?.sourceItem = exportItem
+//        activity.popoverPresentationController?.sourceItem = exportItem
         if let presented = presentedViewController {
             presented.dismiss(animated: true) { [weak self] in
                 self?.present(activity, animated: true)

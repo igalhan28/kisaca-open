@@ -26,7 +26,7 @@ final class AppCoordinator: NSObject {
 
     init(library: LectureLibrary) {
         self.library = library
-        navigationController = UINavigationController()
+        navigationController = AppNavigationController()
         home = LibraryViewController(library: library)
         super.init()
 
@@ -214,4 +214,11 @@ extension AppCoordinator: UINavigationControllerDelegate {
         syncs = [:]
         Task { await library.closeAll() }
     }
+}
+
+/// Lets the screen on top decide whether the status bar and home indicator show —
+/// the notebook hides both when its controls are tapped away.
+final class AppNavigationController: UINavigationController {
+    override var childForStatusBarHidden: UIViewController? { topViewController }
+    override var childForHomeIndicatorAutoHidden: UIViewController? { topViewController }
 }

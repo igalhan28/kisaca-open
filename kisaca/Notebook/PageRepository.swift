@@ -6,7 +6,7 @@
 //  is either one session, or a whole section read as one continuous book (every
 //  Monday and Thursday lecture in order) — see `Scope`. This is
 //  pure data plumbing — no view/gesture/lifecycle concerns — used by
-//  `NotebookScrollViewController` to load a page's markup on demand and persist it
+//  `NotebookPagerViewController` to load a page's markup on demand and persist it
 //  back. It has no opinion about how many pages are alive at once; that's the
 //  collection view's job (cell reuse), not this class's.
 //
