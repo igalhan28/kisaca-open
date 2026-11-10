@@ -26,7 +26,7 @@ import UIKit
 /// hundreds of MB) and Core Animation fills it exactly on the pixels its frame
 /// covers. So each line's frame is snapped to device pixels here, and the grid is
 /// sharp at every zoom. That only holds while this view itself sits on whole pixels,
-/// which is why `NotebookScrollViewController` snaps tile frames too.
+/// which a page shown at a fractional zoom does not always do.
 final class UIGridBackgroundView: UIView {
 
     /// Screen points per page point — the zoom this page is currently shown at.

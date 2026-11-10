@@ -46,7 +46,7 @@ nonisolated enum PageGeometry {
     /// Opaque: the pale blue that 30% blue used to give on white, without the
     /// transparency — overlapping line layers on screen would otherwise darken where
     /// they cross. The paper is always white, so nothing else changes.
-    static let gridColor = UIColor(red: 0.7, green: 0.7, blue: 1, alpha: 1)
+    static let gridColor = UIColor(red: 0, green: 0, blue: 0, alpha: 0.2)
 }
 
 extension PaperMarkup {

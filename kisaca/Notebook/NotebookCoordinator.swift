@@ -3,18 +3,16 @@
 //  kisaca
 //
 //  Observable state between the notebook screen's bar (`NotebookViewController`) and
-//  the canvas (`NotebookScrollViewController`). The screen observes `currentPageIndex` /
+//  the canvas (`NotebookPagerViewController`). The screen observes `currentPageIndex` /
 //  `totalPages` and the rest for its bar (UIKit tracks the reads in `updateProperties`);
-//  bar actions call the methods here, which just forward to the scroll view controller.
+//  bar actions call the methods here, which just forward to the pager.
 //  Things the screen has to present (the share sheet, the selected-text alert) come
 //  through callbacks rather than observed flags.
 //
-//  Also owns the autosave timer: periodically flushes whichever page currently has
-//  the tool picker, so a page the user sits and writes on for a long time without
-//  ever scrolling still gets saved regularly. Every *other* page is already flushed
-//  the moment it scrolls off screen (see `NotebookScrollViewController`'s
-//  `didEndDisplaying`) — this timer only needs to cover the one page that's both
-//  on-screen and possibly being actively edited right now.
+//  Also owns the autosave timer: periodically flushes the page on screen, so a page
+//  the user sits and writes on for a long time without turning still gets saved
+//  regularly. Every *other* page is already flushed the moment it is turned away from
+//  (see `NotebookPagerViewController`).
 //
 
 import CoreGraphics
@@ -53,7 +51,7 @@ final class NotebookCoordinator {
     // MARK: - Internal link to UIKit
 
     /// Set by `NotebookViewController`.
-    @ObservationIgnored weak var scrollVC: NotebookScrollViewController?
+    @ObservationIgnored weak var pager: NotebookPagerViewController?
 
     /// Set by `NotebookViewController`.
     @ObservationIgnored var pageRepository: PageRepository?
@@ -68,7 +66,7 @@ final class NotebookCoordinator {
         autosaveTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
             [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in self.scrollVC?.autosaveActivePage() }
+            Task { @MainActor in self.pager?.autosaveActivePage() }
         }
     }
 
@@ -80,30 +78,39 @@ final class NotebookCoordinator {
     }
 
     func flushActivePage() {
-        scrollVC?.flushActivePage()
+        pager?.flushActivePage()
     }
 
     // MARK: - Actions (called by the notebook screen's bar)
 
     func addPage() {
-        scrollVC?.addPage()
+        pager?.addPage()
     }
 
     func deleteCurrentPage() {
-        scrollVC?.deleteCurrentPage()
+        pager?.deleteCurrentPage()
     }
 
-    /// See `NotebookScrollViewController.reclaimToolPicker()`.
-    func reclaimToolPicker() {
-        scrollVC?.reclaimToolPicker()
+    /// Goes straight to the page at `index`, without a turn.
+    func showPage(at index: Int) {
+        pager?.showPage(at: index)
+    }
+
+    /// See `NotebookPagerViewController.reclaimFocus()`.
+    func reclaimFocus() {
+        pager?.reclaimFocus()
     }
 
     func clear() {
-        scrollVC?.clearActivePage()
+        pager?.clearActivePage()
     }
 
     func undo() {
-        scrollVC?.undoActivePage()
+        pager?.undoActivePage()
+    }
+
+    func redo() {
+        pager?.redoActivePage()
     }
 
     // MARK: - Selected text
@@ -120,7 +127,7 @@ final class NotebookCoordinator {
     /// is not documented and can't be checked in the simulator without a Pencil, so the
     /// alert reports which case it hit rather than silently showing nothing.
     func showSelectedText() {
-        guard let selection = scrollVC?.activeSelection else {
+        guard let selection = pager?.activeSelection else {
             present("Nothing is selected on this page.")
             return
         }
@@ -163,12 +170,12 @@ final class NotebookCoordinator {
     ///   - fileName: desired PDF name (without extension), e.g. "Calculus II - Exercise
     ///     Sessions - 29.10.2026". `nil` falls back to a timestamped default.
     func generatePDF(pageIndices: [Int]? = nil, fileName: String? = nil) {
-        guard let scrollVC, let pageRepository else { return }
+        guard let pager, let pageRepository else { return }
         guard !isExporting else { return }  // Prevent double-tap.
 
         // Capture live markup before going async (on the main actor).
-        scrollVC.flushActivePage()
-        let activeMarkup = scrollVC.activeMarkup
+        pager.flushActivePage()
+        let activeMarkup = pager.activeMarkup
         let activeIndex = currentPageIndex
 
         isExporting = true

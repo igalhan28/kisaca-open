@@ -22,6 +22,13 @@ struct LibrarySettingsView: View {
     @AppStorage(AppPreferences.Key.notebookFitsWidth)
     private var notebookFitsWidth = false
 
+    @AppStorage(AppPreferences.Key.leftHanded)
+    private var leftHanded = false
+
+    private var materialOpensOnLeft: Bool {
+        (MaterialPaneSide(rawValue: paneSideRaw) ?? .default).isOnLeft(leftHanded: leftHanded)
+    }
+
     @State private var isMoving = false
     @State private var moveResult: String?
 
@@ -56,12 +63,24 @@ struct LibrarySettingsView: View {
                     )
                 }
 
-                Section("Material Beside Notes") {
-                    Picker("Opens On", selection: $paneSideRaw) {
-                        Text("Left").tag(MaterialPaneSide.leading.rawValue)
-                        Text("Right").tag(MaterialPaneSide.trailing.rawValue)
+                Section {
+                    Picker("Opens", selection: $paneSideRaw) {
+                        Text("Next to Sidebar").tag(MaterialPaneSide.besideSidebar.rawValue)
+                        Text("Opposite Side").tag(MaterialPaneSide.oppositeSidebar.rawValue)
                     }
                     Toggle("Fit Notebook Page to Width", isOn: $notebookFitsWidth)
+                } header: {
+                    Text("Material Beside Notes")
+                } footer: {
+                    Text("Material opens on the \(materialOpensOnLeft ? "left" : "right") of your notes.")
+                }
+
+                Section {
+                    Toggle("Left-Handed", isOn: $leftHanded)
+                } header: {
+                    Text("Sidebar")
+                } footer: {
+                    Text("The notebook's sidebar runs down the \(leftHanded ? "right" : "left") edge of the screen, away from your writing hand.")
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in

@@ -6,7 +6,7 @@
 //  is either one session, or a whole section read as one continuous book (every
 //  Monday and Thursday lecture in order) — see `Scope`. This is
 //  pure data plumbing — no view/gesture/lifecycle concerns — used by
-//  `NotebookScrollViewController` to load a page's markup on demand and persist it
+//  `NotebookPagerViewController` to load a page's markup on demand and persist it
 //  back. It has no opinion about how many pages are alive at once; that's the
 //  collection view's job (cell reuse), not this class's.
 //
@@ -74,6 +74,12 @@ final class PageRepository {
     }
 
     var pageCount: Int { pageIDs.count }
+
+    /// The pages grouped by the session that owns them, in notebook order — the page
+    /// thumbnails show a heading per session.
+    var pageGroups: [(session: LectureSession, pageIDs: [UUID])] {
+        sessions.map { ($0, $0.pageIDs) }
+    }
 
     /// The session that owns the page at `index` — what the toolbar names while
     /// scrolling through a whole-section notebook.
