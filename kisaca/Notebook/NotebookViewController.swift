@@ -12,14 +12,18 @@
 //  Course material can open beside the notebook (the split button): see
 //  `MaterialPaneViewController` and "Material pane" below.
 //
-//  No navigation bar (2026-11-09): a black sidebar (`ToolRailView`) runs down the
-//  notebook's leading edge — back at the top, the tools, and at the bottom the
-//  materials button, which slides the material out of the sidebar beside the notes.
-//  It stays with the notebook when material is open: [material | sidebar | notebook].
-//  The tool disk (`ToolDiskView`, two-finger sideways swipe) has the same tools; the
-//  system tool picker isn't shown. A finger tap anywhere on the page slides the sidebar
-//  away and hides the status bar and home indicator for a clean page — tap again to
-//  bring them back. See "Chrome" below.
+//  No navigation bar (2026-11-09): a black sidebar (`ToolRailView`), a dock in the
+//  manner of Ubuntu's, is pinned to the screen's left edge — the right edge in
+//  left-handed mode (2026-11-10) — whatever else is open. Back at the top, then the
+//  applets (the course material, which slides out of the sidebar beside the notes),
+//  the tools, undo and redo. A black status strip runs across the top under the status
+//  bar, so with the sidebar it frames the screen in one colour and the clock and
+//  battery always read white on black, in light and dark mode alike.
+//  The tool wheel (`ToolWheelView`, two fingers swiped sideways) turns through the
+//  recently used tool + colour + width combinations; the system tool picker isn't
+//  shown. A finger tap anywhere on the page slides the sidebar and strip away and
+//  hides the status bar and home indicator for a clean page — tap again to bring them
+//  back. See "Chrome" below.
 //
 //  Owns the autosave timer's lifecycle (start on appear, flush + stop on disappear or
 //  when the app leaves the active state) — see NotebookCoordinator.swift and
@@ -38,17 +42,19 @@ final class NotebookViewController: UIViewController {
 
     // MARK: - Chrome
     //
-    // The sidebar sits beside the notebook; `chromeHidden` slides it away (and hides
-    // the status bar and home indicator).
+    // The sidebar at its screen edge and the status strip across the top;
+    // `chromeHidden` slides them away (and hides the status bar and home indicator).
 
     private let toolbox = NotebookToolbox()
     private lazy var rail = ToolRailView(
         showsTools: PageCanvasController.isEditingAvailable,
         send: { [weak self] action in self?.perform(action) },
-        onBack: { [weak self] in self?.navigationController?.popViewController(animated: true) },
-        onMaterials: { [weak self] in self?.toggleMaterialPane() })
-    private var disk: ToolDiskView?
+        onBack: { [weak self] in self?.navigationController?.popViewController(animated: true) })
+    /// The sidebar's black under the status bar, the full width of the screen.
+    private let statusStrip = UIView()
+    private var wheel: ToolWheelView?
     private var chromeHidden = false
+    private static let materialsApplet = "materials"
     private var showsTools: Bool { PageCanvasController.isEditingAvailable }
 
     init(document: LectureDocument, route: NotebookRoute) {
@@ -139,7 +145,7 @@ final class NotebookViewController: UIViewController {
         view.addSubview(notebook.view)
         notebook.didMove(toParent: self)
 
-        divider.isHidden = true
+        divider.alpha = 0
         divider.addGestureRecognizer(
             UIPanGestureRecognizer(target: self, action: #selector(dividerPanned(_:))))
         view.addSubview(divider)
@@ -190,6 +196,7 @@ final class NotebookViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(true, animated: animated)
+        view.setNeedsLayout()  // Left-handed may have changed in Settings.
         coordinator.startAutosaveTimer()
     }
 
@@ -199,6 +206,8 @@ final class NotebookViewController: UIViewController {
     }
 
     override var prefersStatusBarHidden: Bool { chromeHidden }
+    /// On the black status strip, in light and dark mode alike.
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
     override var prefersHomeIndicatorAutoHidden: Bool { chromeHidden }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
@@ -224,7 +233,7 @@ final class NotebookViewController: UIViewController {
 //        pageCounterLabel.sizeToFit()
 //        deletePageItem.isEnabled = coordinator.canDeleteCurrentPage
 //
-        rail.setMaterialsOpen(showingMaterialPane)
+        rail.setApplet(Self.materialsApplet, active: showingMaterialPane)
 //
 //        exportOverlay.isHidden = !coordinator.isExporting
     }
@@ -255,76 +264,119 @@ final class NotebookViewController: UIViewController {
     /// so opening, closing or moving the pane never rebuilds the canvas (which would
     /// drop its scroll position, zoom and any unsaved ink).
     ///
-    /// The notebook covers the full height (it scrolls under the bars); the pane sits
-    /// in the safe area, and the divider runs from under the top bar to the bottom edge.
+    /// [sidebar | material | divider | notebook], or [sidebar | notebook | divider |
+    /// material] with the material on the right — mirrored in left-handed mode, the
+    /// sidebar on the right. The sidebar never leaves its screen edge: it is the dock
+    /// the material slides out of.
+    ///
+    /// The notebook runs the full height, under the status strip the way a page runs
+    /// under a navigation bar: PaperKit insets the page by the safe area, and needs that
+    /// inset to fit an A4 page exactly to the width — starting the notebook below the
+    /// strip took it away and left the page slightly zoomed in. The material and the
+    /// divider start below the status bar. With the chrome hidden the sidebar slides off
+    /// its edge and the strip fades; the notebook takes the sidebar's width.
     private func layoutSplit() {
-        placeNotebookAndPane()
-    }
-
-    /// [material | sidebar | notebook], or [sidebar | notebook | divider | material]
-    /// with the material on the right. The sidebar stays at the notebook's leading
-    /// edge, so its controls are on the page side either way; on the left it is also the
-    /// handle that resizes the material (see `dividerPanned`). With the chrome hidden
-    /// the sidebar slides away and the notebook takes its width.
-    private func placeNotebookAndPane() {
+        let edge: ToolRailView.Edge = isLeftHanded ? .right : .left
+        if rail.edge != edge {
+            rail.edge = edge
+            refreshTools()
+        }
         let bounds = view.bounds
         let safe = view.safeAreaInsets
-        let side = chromeHidden ? 0 : ToolRailView.width
-        let fullHeight = bounds.height - safe.top
-        var region = bounds
-        if let pane = inlinePane {
-            let total = bounds.width
-            let paneWidth = (total * clampedFraction(paneFraction)).rounded()
-            let paneHeight = bounds.height - safe.top - safe.bottom
-            if paneIsOnLeft {
-                pane.view.frame = CGRect(x: 0, y: safe.top, width: paneWidth, height: paneHeight)
-                region = CGRect(x: paneWidth, y: 0, width: total - paneWidth, height: bounds.height)
-                divider.isHidden = true
-            } else {
-                let rest = total - paneWidth - Self.dividerWidth
-                region = CGRect(x: 0, y: 0, width: rest, height: bounds.height)
-                divider.frame = CGRect(
-                    x: rest, y: safe.top, width: Self.dividerWidth, height: fullHeight)
-                pane.view.frame = CGRect(
-                    x: rest + Self.dividerWidth, y: safe.top, width: paneWidth, height: paneHeight)
-                divider.isHidden = false
-            }
-        } else {
-            divider.isHidden = true
-        }
+        let region = contentRegion
+        let railWidth = self.railWidth
         rail.frame = CGRect(
-            x: region.minX + side - ToolRailView.width, y: safe.top,
-            width: ToolRailView.width, height: fullHeight)
-        notebook.view.frame = CGRect(
-            x: region.minX + side, y: 0, width: region.width - side, height: bounds.height)
+            x: edge == .left ? region.minX - railWidth : region.maxX,
+            y: 0, width: railWidth, height: bounds.height)
+        statusStrip.frame = CGRect(x: 0, y: 0, width: bounds.width, height: safe.top)
+        statusStrip.alpha = chromeHidden ? 0 : 1
+
+        let paneTop = safe.top
+        let paneHeight = bounds.height - safe.top - safe.bottom
+        let dividerHeight = bounds.height - safe.top
+        let notebookFrame: CGRect
+        if let pane = inlinePane {
+            let paneWidth = (bounds.width * clampedFraction(paneFraction)).rounded()
+            let notebookWidth = region.width - paneWidth - Self.dividerWidth
+            if paneIsOnLeft {
+                pane.view.frame = CGRect(x: region.minX, y: paneTop, width: paneWidth, height: paneHeight)
+                divider.frame = CGRect(
+                    x: region.minX + paneWidth, y: paneTop, width: Self.dividerWidth, height: dividerHeight)
+                notebookFrame = CGRect(
+                    x: divider.frame.maxX, y: region.minY, width: notebookWidth, height: region.height)
+            } else {
+                notebookFrame = CGRect(
+                    x: region.minX, y: region.minY, width: notebookWidth, height: region.height)
+                divider.frame = CGRect(
+                    x: notebookFrame.maxX, y: paneTop, width: Self.dividerWidth, height: dividerHeight)
+                pane.view.frame = CGRect(
+                    x: divider.frame.maxX, y: paneTop, width: paneWidth, height: paneHeight)
+            }
+            divider.alpha = 1
+        } else {
+            notebookFrame = region
+            // Tucked where the material comes from, so it arrives and leaves with it.
+            divider.frame = CGRect(
+                x: paneIsOnLeft ? region.minX - Self.dividerWidth : region.maxX, y: paneTop,
+                width: Self.dividerWidth, height: dividerHeight)
+            divider.alpha = 0
+        }
+        notebook.view.frame = notebookFrame
     }
 
-    /// Where the material sits while it slides in or out — just past the sidebar, off
-    /// the screen's edge.
+    private var isLeftHanded: Bool {
+        UserDefaults.standard.bool(forKey: AppPreferences.Key.leftHanded)
+    }
+
+    /// The sidebar's width, widened by the notch's inset on its side (an iPhone in
+    /// landscape) so its controls stay clear of the notch.
+    private var railWidth: CGFloat {
+        let safe = view.safeAreaInsets
+        return ToolRailView.width + (rail.edge == .left ? safe.left : safe.right)
+    }
+
+    /// Everything beside the sidebar, the full height: the notebook, and the material
+    /// when it is open.
+    private var contentRegion: CGRect {
+        let bounds = view.bounds
+        let shown = chromeHidden ? 0 : railWidth
+        return CGRect(
+            x: rail.edge == .left ? shown : 0, y: 0, width: bounds.width - shown, height: bounds.height)
+    }
+
+    /// Where the material sits while it slides in or out: behind the sidebar when it
+    /// opens on the sidebar's side, otherwise just off the screen's far edge.
     private func tuckedFrame(of pane: UIView) -> CGRect {
         var frame = pane.frame
-        frame.origin.x = paneIsOnLeft ? -frame.width : view.bounds.maxX
+        let region = contentRegion
+        frame.origin.x = paneIsOnLeft ? region.minX - frame.width : region.maxX
         return frame
     }
 }
 
-// MARK: - Chrome: sidebar, disk, tap to hide
+// MARK: - Chrome: sidebar, status strip, tool wheel, tap to hide
 
 extension NotebookViewController: UIGestureRecognizerDelegate {
     private func setUpChrome() {
-        // Above the material, so the material slides out from behind it.
+        // Above the material and the divider, so they slide out from behind it.
         view.insertSubview(rail, belowSubview: dragIndicator)
-        rail.setMaterialsOpen(false)
-        // With the material on the left, dragging the sidebar sideways resizes it.
-        let resize = UIPanGestureRecognizer(target: self, action: #selector(dividerPanned(_:)))
-        resize.delegate = self
-        rail.addGestureRecognizer(resize)
+        statusStrip.backgroundColor = ToolRailView.backgroundColor
+        statusStrip.isUserInteractionEnabled = false
+        view.insertSubview(statusStrip, aboveSubview: rail)
+        rail.addApplet(
+            RailApplet(
+                id: Self.materialsApplet, title: "Materials", symbol: "books.vertical",
+                activeSymbol: "books.vertical.fill",
+                action: { [weak self] in self?.toggleMaterialPane() }))
+        rail.setApplet(Self.materialsApplet, active: false)
 
         toolbox.observe { [weak self] _ in
             self?.notebook.activateCurrentPage()
             self?.refreshTools()
         }
         notebook.onUndoStateChange = { [weak self] in self?.refreshTools() }
+        // Writing with a tool makes it one of the wheel's recent combinations.
+        notebook.onBeginDrawing = { [weak self] in self?.toolbox.noteCurrentToolUsed() }
 
         // A finger tap on the page: hide / show the chrome.
         let tap = UITapGestureRecognizer(target: self, action: #selector(pageTapped(_:)))
@@ -333,37 +385,36 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         tap.delegate = self
         notebook.view.addGestureRecognizer(tap)
 
-        // Two fingers swiped sideways: the tool disk.
+        // Two fingers swiped sideways: the tool wheel, turning as they move.
         guard showsTools else { return }
-        for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
-            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(twoFingerSwipe(_:)))
-            swipe.direction = direction
-            swipe.numberOfTouchesRequired = 2
-            swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-            swipe.cancelsTouchesInView = false
-            swipe.delegate = self
-            notebook.view.addGestureRecognizer(swipe)
-        }
+        let wheelSwipe = TwoFingerSwipeRecognizer(target: self, action: #selector(wheelSwiped(_:)))
+        wheelSwipe.delegate = self
+        notebook.view.addGestureRecognizer(wheelSwipe)
         // The Pencil's double-tap and squeeze are the hidden system tool picker's
         // (`PageCanvasController.activate`); the pager carries what they change into the
         // toolbox.
     }
 
-    /// Slides the sidebar away (the notebook takes its width) and hides the status bar
-    /// and home indicator — or brings them back.
+    /// Slides the sidebar off its edge and fades the status strip (the notebook takes
+    /// their room), hiding the status bar and home indicator — or brings them back.
     private func setChromeHidden(_ hidden: Bool) {
         guard hidden != chromeHidden else { return }
         chromeHidden = hidden
-        if !hidden { rail.isHidden = false }
+        if !hidden {
+            rail.isHidden = false
+            statusStrip.isHidden = false
+        }
         UIView.animate(
             withDuration: 0.3, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0
         ) {
-            self.rail.alpha = hidden ? 0 : 1
             self.setNeedsStatusBarAppearanceUpdate()
             self.view.setNeedsLayout()
             self.view.layoutIfNeeded()
         } completion: { _ in
-            if self.chromeHidden { self.rail.isHidden = true }
+            if self.chromeHidden {
+                self.rail.isHidden = true
+                self.statusStrip.isHidden = true
+            }
         }
         setNeedsUpdateOfHomeIndicatorAutoHidden()
     }
@@ -373,20 +424,34 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         setChromeHidden(!chromeHidden)
     }
 
-    @objc private func twoFingerSwipe(_ recognizer: UISwipeGestureRecognizer) {
-        guard recognizer.state == .ended else { return }
-        toggleDisk()
+    /// The tool wheel follows the two-finger swipe: up when it begins, turning as the
+    /// fingers move, and on lift the combination under its pointer is taken up.
+    @objc private func wheelSwiped(_ recognizer: TwoFingerSwipeRecognizer) {
+        switch recognizer.state {
+        case .began:
+            let wheel = ToolWheelView(combos: toolbox.wheelCombos)
+            wheel.frame = notebook.view.frame
+            view.insertSubview(wheel, belowSubview: exportOverlay)
+            self.wheel = wheel
+            wheel.present()
+            wheel.turn(toTranslation: recognizer.translation)
+        case .changed:
+            wheel?.turn(toTranslation: recognizer.translation)
+        case .ended:
+            guard let wheel else { return }
+            self.wheel = nil
+            if let combo = wheel.commit(), combo != toolbox.currentCombo {
+                toolbox.apply(combo)
+            }
+        default:
+            wheel?.cancel()
+            wheel = nil
+        }
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        // Dragging the sidebar sideways resizes the material — when it's on the left,
-        // and only sideways, so the tools still scroll.
-        if let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.view === rail {
-            let velocity = pan.velocity(in: view)
-            return inlinePane != nil && paneIsOnLeft && abs(velocity.x) > abs(velocity.y)
-        }
-        // Zoomed in, two fingers pan the page sideways.
-        guard gestureRecognizer is UISwipeGestureRecognizer else { return true }
+        // Zoomed in, two fingers pan the page sideways — not the wheel.
+        guard gestureRecognizer is TwoFingerSwipeRecognizer else { return true }
         return !(notebook.currentCanvas?.isZoomedIn ?? false)
     }
 
@@ -400,8 +465,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     private func refreshTools() {
         let canUndo = notebook.canUndo
         let canRedo = notebook.canRedo
-        rail.controls.show(toolbox, canUndo: canUndo, canRedo: canRedo)
-        disk?.controls.show(toolbox, canUndo: canUndo, canRedo: canRedo)
+        rail.show(toolbox, canUndo: canUndo, canRedo: canRedo)
     }
 
     private func perform(_ action: NotebookToolAction) {
@@ -417,37 +481,16 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     /// PaperKit's own insert menu — shapes, lines, text box — added to the page on
-    /// screen. Anchored where the button was, also when that was on the disk, which
-    /// closes first.
+    /// screen, anchored on the sidebar's button.
     private func showInsertMenu(from source: UIView) {
         guard let canvas = notebook.currentCanvas else { return }
         let anchor = source.convert(source.bounds, to: view)
-        disk?.dismiss()
         let menu = MarkupEditViewController(supportedFeatureSet: .latest, additionalActions: [])
         menu.delegate = canvas
         menu.modalPresentationStyle = .popover
         menu.popoverPresentationController?.sourceView = view
         menu.popoverPresentationController?.sourceRect = anchor
         present(menu, animated: true)
-    }
-
-    private func toggleDisk() {
-        if let disk {
-            disk.dismiss()
-            return
-        }
-        let disk = ToolDiskView { [weak self] action in self?.perform(action) }
-        disk.onLayout = { [weak self] in self?.refreshTools() }
-        disk.onDismiss = { [weak self, weak disk] in
-            if self?.disk === disk { self?.disk = nil }
-            self?.coordinator.reclaimFocus()
-        }
-        disk.frame = notebook.view.frame
-        disk.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.insertSubview(disk, belowSubview: exportOverlay)
-        self.disk = disk
-        refreshTools()
-        disk.present()
     }
 }
 
@@ -591,15 +634,21 @@ extension NotebookViewController {
         return pane
     }
 
+    /// Dragging the divider: the material's width is measured from the edge of the
+    /// region beside the sidebar, as a share of the screen's width.
     @objc private func dividerPanned(_ recognizer: UIPanGestureRecognizer) {
         let total = view.bounds.width
         guard total > 0 else { return }
+        let region = contentRegion
+        let half = Self.dividerWidth / 2
         switch recognizer.state {
         case .began, .changed:
-            let x = recognizer.location(in: view).x / total
-            let fraction = clampedFraction(paneIsOnLeft ? x : 1 - x)
+            let x = recognizer.location(in: view).x
+            let width = paneIsOnLeft ? x - half - region.minX : region.maxX - x - half
+            let fraction = clampedFraction(width / total)
             dragFraction = fraction
-            let lineX = (paneIsOnLeft ? fraction : 1 - fraction) * total
+            let paneWidth = (fraction * total).rounded()
+            let lineX = paneIsOnLeft ? region.minX + paneWidth + half : region.maxX - paneWidth - half
             dragIndicator.frame = CGRect(x: lineX - 1.5, y: 0, width: 3, height: view.bounds.height)
             dragIndicator.isHidden = false
         case .ended:

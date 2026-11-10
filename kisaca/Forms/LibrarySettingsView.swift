@@ -22,6 +22,9 @@ struct LibrarySettingsView: View {
     @AppStorage(AppPreferences.Key.notebookFitsWidth)
     private var notebookFitsWidth = false
 
+    @AppStorage(AppPreferences.Key.leftHanded)
+    private var leftHanded = false
+
     @State private var isMoving = false
     @State private var moveResult: String?
 
@@ -62,6 +65,14 @@ struct LibrarySettingsView: View {
                         Text("Right").tag(MaterialPaneSide.trailing.rawValue)
                     }
                     Toggle("Fit Notebook Page to Width", isOn: $notebookFitsWidth)
+                }
+
+                Section {
+                    Toggle("Left-Handed", isOn: $leftHanded)
+                } header: {
+                    Text("Sidebar")
+                } footer: {
+                    Text("The notebook's sidebar runs down the \(leftHanded ? "right" : "left") edge of the screen, away from your writing hand.")
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in

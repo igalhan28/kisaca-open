@@ -38,7 +38,7 @@ final class PageCanvasController: UIViewController {
     /// simulator has no Pencil, so for smoke-testing ink there a finger can be let in
     /// with a launch argument — `xcrun simctl launch <device> com.igalhan.kisaca
     /// -KisacaFingerInk YES`. Off by default, so fingers turn pages, scroll and open
-    /// the tool disk in the simulator exactly as they do on an iPad.
+    /// turn the tool wheel in the simulator exactly as they do on an iPad.
     private static let editingTouchTypes: [NSNumber] =
         fingerInks
         ? [UITouch.TouchType.pencil, .direct].map { NSNumber(value: $0.rawValue) }
@@ -334,8 +334,8 @@ final class PageCanvasController: UIViewController {
     /// Hands the notebook's tool (`NotebookToolbox`) to this page and makes its canvas
     /// first responder — what undo and PaperKit's editing follow.
     ///
-    /// The system tool picker is attached but `.hidden` (2026-11-09): our rail and
-    /// tool disk replace its bar, but PaperKit only edits while a picker is *active* —
+    /// The system tool picker is attached but `.hidden` (2026-11-09): our sidebar
+    /// replaces its bar, but PaperKit only edits while a picker is *active* —
     /// with none, the page is view-only (checked in the simulator: no picker, no ink).
     /// `.hidden` is PencilKit's "active but offscreen": editable, Pencil double-tap and
     /// squeeze still work, nothing on screen. The page is deliberately *not* the
@@ -369,8 +369,11 @@ final class PageCanvasController: UIViewController {
     /// (the material pane's PDF view, a menu) can take it.
     var canvasIsFirstResponder: Bool { paperVC.isFirstResponder }
 
-    /// Called whenever undo / redo may have changed — the rail enables its buttons.
+    /// Called whenever undo / redo may have changed — the sidebar enables its buttons.
     var onUndoStateChange: () -> Void = {}
+
+    /// The Pencil started a stroke (writing, erasing, lassoing) with the tool in hand.
+    var onBeginDrawing: () -> Void = {}
 
     var canUndo: Bool { paperVC.undoManager?.canUndo ?? false }
     var canRedo: Bool { paperVC.undoManager?.canRedo ?? false }
@@ -478,6 +481,7 @@ extension PageCanvasController: @preconcurrency PaperMarkupViewController.Delega
         _ paperMarkupViewController: PaperMarkupViewController
     ) {
         strokeBeganAt = Date()
+        onBeginDrawing()
     }
 
     func paperMarkupViewControllerDidChangeSelection(

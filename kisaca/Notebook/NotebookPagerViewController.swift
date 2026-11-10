@@ -57,12 +57,14 @@ final class NotebookPagerViewController: UIViewController {
         navigationOrientation: .horizontal,
         options: [.spineLocation: UIPageViewController.SpineLocation.min.rawValue])
 
-    /// The tool the Pencil holds — set by `NotebookViewController`, shared with the rail
-    /// and the disk. Handed to the page on screen (`activateCurrentPage`).
+    /// The tool the Pencil holds — set by `NotebookViewController`, shared with the
+    /// sidebar and the tool wheel. Handed to the page on screen (`activateCurrentPage`).
     var toolbox: NotebookToolbox?
 
     /// Undo / redo may have changed on the page on screen.
     var onUndoStateChange: () -> Void = {}
+    /// The Pencil began a stroke on the page on screen.
+    var onBeginDrawing: () -> Void = {}
 
     /// The system tool picker, attached `.hidden` to the page on screen — no bar, but
     /// PaperKit only edits with an active picker (see `PageCanvasController.activate`).
@@ -211,6 +213,7 @@ final class NotebookPagerViewController: UIViewController {
         guard canvas !== currentPage else { return }
         if canvas === activePage {
             canvas.onUndoStateChange = {}
+            canvas.onBeginDrawing = {}
             canvas.deactivate()
             activePage = nil
         }
@@ -345,9 +348,11 @@ final class NotebookPagerViewController: UIViewController {
         guard let page = currentPage else { return }
         if page !== activePage {
             activePage?.onUndoStateChange = {}
+            activePage?.onBeginDrawing = {}
             activePage?.deactivate()
             activePage = page
             page.onUndoStateChange = { [weak self] in self?.onUndoStateChange() }
+            page.onBeginDrawing = { [weak self] in self?.onBeginDrawing() }
         }
         if let toolbox {
             page.activate(tool: toolbox.tool, rulerActive: toolbox.isRulerActive, picker: toolPicker)

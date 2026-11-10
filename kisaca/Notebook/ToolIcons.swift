@@ -5,8 +5,8 @@
 //  Drawn pictures of the notebook's tools — a pen, a fountain pen, a pencil, a
 //  fineliner, a highlighter, an eraser, a lasso — lying on their side with the tip to
 //  the right, the part that writes in the tool's ink colour. Used by the sidebar
-//  (`ToolRailView`), where they point into the page, and the tool disk, where each is
-//  turned to point outwards.
+//  (`ToolRailView`), where they point into the page (mirrored when it is on the right),
+//  and the tool wheel (`ToolWheelView`).
 //
 
 import UIKit
@@ -17,13 +17,19 @@ enum ToolIcons {
     static let size = CGSize(width: 58, height: 24)
 
     private static let bodyColor = UIColor(white: 0.97, alpha: 1)
-    // Light: the pictures sit on black (the sidebar, the dark disk), and a black pencil
+    // Light: the pictures sit on black (the sidebar, the dark wheel), and a black pencil
     // or the dark fountain pen would vanish without it.
     private static let outline = UIColor(white: 0.62, alpha: 1)
     private static let metal = UIColor(white: 0.78, alpha: 1)
 
-    static func image(for kind: NotebookToolKind, ink: UIColor, erasesPixels: Bool = false) -> UIImage {
-        UIGraphicsImageRenderer(size: size).image { context in
+    /// - Parameter magnification: how much larger than `size` it will be shown — drawn
+    ///   with that many more pixels so it stays sharp (the wheel's hub).
+    static func image(
+        for kind: NotebookToolKind, ink: UIColor, erasesPixels: Bool = false, magnification: CGFloat = 1
+    ) -> UIImage {
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale *= max(magnification, 1)
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
             let cg = context.cgContext
             let midY = size.height / 2
             switch kind {
