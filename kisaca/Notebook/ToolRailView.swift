@@ -400,6 +400,10 @@ final class ToolRailView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // The scroll view measures its content (the stack) in its own layout pass, which
+        // otherwise runs after this one — the scrollbar would go by a stale content size
+        // and could show with nothing to scroll.
+        scrollView.layoutIfNeeded()
         updateScrollIndicators()
     }
 

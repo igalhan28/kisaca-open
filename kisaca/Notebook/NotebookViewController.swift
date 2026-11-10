@@ -502,9 +502,10 @@ extension NotebookViewController {
             .flatMap(MaterialPaneSide.init(rawValue:)) ?? .default
     }
 
-    /// Leading/trailing on screen: leading is the right side in a right-to-left layout.
+    /// The material's side is relative to the sidebar (next to it, or opposite), and
+    /// the sidebar is on the left unless left-handed — see `MaterialPaneSide`.
     private var paneIsOnLeft: Bool {
-        (paneSide == .leading) == (view.effectiveUserInterfaceLayoutDirection == .leftToRight)
+        paneSide.isOnLeft(leftHanded: isLeftHanded)
     }
 
     private var paneFraction: Double {
