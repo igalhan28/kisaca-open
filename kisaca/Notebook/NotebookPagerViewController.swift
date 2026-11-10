@@ -14,7 +14,7 @@
 //  - Pages turn only from the turn zones — a strip along each side edge (`turnZone`):
 //    a one-finger sideways swipe that starts in the right strip turns forward, in the
 //    left strip back. Taps never turn (UIKit's own tap-to-turn is switched off): a
-//    finger tap anywhere hides or shows the controls (`NotebookViewController`).
+//    finger double-tap anywhere hides or shows the controls (`NotebookViewController`).
 //    Anywhere else a finger drag scrolls the page and a pinch zooms it. While a page is zoomed in, nothing turns —
 //    `TurnGestureGate` holds the turn recognisers back.
 //  - Never with more than one finger down: a turn doesn't start then, and one in
@@ -232,7 +232,7 @@ final class NotebookPagerViewController: UIViewController {
 
     /// The strip along a side edge where a finger turns the page: the right one
     /// forward, the left one back. Everywhere else is the page's
-    /// own — fingers scroll, zoom, and tap to hide the controls there.
+    /// own — fingers scroll, zoom, and double-tap to hide the controls there.
     func turnZone(at point: CGPoint) -> TurnZone? {
         let width = max(64, view.bounds.width * 0.1)
         if point.x >= view.bounds.maxX - width { return .forward }
@@ -332,6 +332,20 @@ final class NotebookPagerViewController: UIViewController {
             didShowPage()
         }
         updatePageCounter()
+    }
+
+    /// Goes straight to the page at `index` — no turn: the page thumbnails' jump. The
+    /// page leaving is flushed first, like after a turn.
+    func showPage(at index: Int) {
+        guard index >= 0, index < repository.pageCount, let leaving = currentPage,
+            index != leaving.pageIndex || leaving.isProvisional
+        else { return }
+        cancelTurnInProgress()
+        flush(leaving)
+        pageViewController.setViewControllers(
+            [canvas(forPageAt: index)], direction: .forward, animated: false)
+        recycle(leaving)
+        didShowPage()
     }
 
     /// After any change of page: the tool moves to it, the bar follows it.

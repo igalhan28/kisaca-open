@@ -75,6 +75,12 @@ final class PageRepository {
 
     var pageCount: Int { pageIDs.count }
 
+    /// The pages grouped by the session that owns them, in notebook order — the page
+    /// thumbnails show a heading per session.
+    var pageGroups: [(session: LectureSession, pageIDs: [UUID])] {
+        sessions.map { ($0, $0.pageIDs) }
+    }
+
     /// The session that owns the page at `index` — what the toolbar names while
     /// scrolling through a whole-section notebook.
     func session(forPageAt index: Int) -> LectureSession? {

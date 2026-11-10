@@ -91,6 +91,11 @@ final class NotebookCoordinator {
         pager?.deleteCurrentPage()
     }
 
+    /// Goes straight to the page at `index`, without a turn.
+    func showPage(at index: Int) {
+        pager?.showPage(at: index)
+    }
+
     /// See `NotebookPagerViewController.reclaimFocus()`.
     func reclaimFocus() {
         pager?.reclaimFocus()

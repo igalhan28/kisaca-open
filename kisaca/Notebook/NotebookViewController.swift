@@ -21,9 +21,9 @@
 //  battery always read white on black, in light and dark mode alike.
 //  The tool wheel (`ToolWheelView`, two fingers swiped sideways) turns through the
 //  recently used tool + colour + width combinations; the system tool picker isn't
-//  shown. A finger tap anywhere on the page slides the sidebar and strip away and
-//  hides the status bar and home indicator for a clean page — tap again to bring them
-//  back. See "Chrome" below.
+//  shown. A finger double-tap anywhere on the page slides the sidebar and strip away
+//  and hides the status bar and home indicator for a clean page — double-tap again to
+//  bring them back. See "Chrome" below.
 //
 //  Owns the autosave timer's lifecycle (start on appear, flush + stop on disappear or
 //  when the app leaves the active state) — see NotebookCoordinator.swift and
@@ -39,6 +39,7 @@ final class NotebookViewController: UIViewController {
     private let route: NotebookRoute
     private let coordinator = NotebookCoordinator()
     private let notebook: NotebookPagerViewController
+    private let repository: PageRepository
 
     // MARK: - Chrome
     //
@@ -54,13 +55,13 @@ final class NotebookViewController: UIViewController {
     private let statusStrip = UIView()
     private var wheel: ToolWheelView?
     private var chromeHidden = false
-    private static let materialsApplet = "materials"
     private var showsTools: Bool { PageCanvasController.isEditingAvailable }
 
     init(document: LectureDocument, route: NotebookRoute) {
         self.document = document
         self.route = route
         let repository = PageRepository(document: document, scope: route.scope)
+        self.repository = repository
         notebook = NotebookPagerViewController(repository: repository, coordinator: coordinator)
         notebook.initialPageIndex = route.initialSessionID.flatMap {
             repository.firstPageIndex(of: $0)
@@ -75,18 +76,55 @@ final class NotebookViewController: UIViewController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    // MARK: - Material pane state
+    // MARK: - Applet panel state
     //
-    // Side and width are device preferences (AppPreferences) — kept across launches, the
-    // same for every lecture; whether it is open and what it shows are not.
+    // An applet is a panel the sidebar opens beside the notes (docs/sidebar.md). One is
+    // open at a time: beside the notebook in regular width, as a sheet in compact width
+    // (iPhone, narrow Split View) where there is no room for two panes side by side.
 
-    private var showingMaterialPane = false
+    /// The applets, in the sidebar's order.
+    fileprivate enum Applet: String, CaseIterable {
+        case materials, pages
+
+        var title: String {
+            switch self {
+            case .materials: "Materials"
+            case .pages: "Pages"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .materials: "books.vertical"
+            case .pages: "rectangle.grid.1x2"
+            }
+        }
+
+        var activeSymbol: String { symbol + ".fill" }
+
+        /// Whether dragging the divider resizes it. The page thumbnails are one column
+        /// of a fixed width.
+        var isResizable: Bool { self == .materials }
+    }
+
+    /// An applet's panel and the applet it belongs to.
+    fileprivate struct Panel {
+        let applet: Applet
+        let controller: UIViewController
+    }
+
+    /// The open applet, wherever it shows.
+    private var openApplet: Applet?
+    /// The panel beside the notebook (regular width).
+    private var inlinePanel: Panel?
+    /// The panel as a sheet over the notebook (compact width).
+    private var sheetPanel: Panel?
+    /// The applet shown last — while none is open, the divider waits tucked on its side.
+    private var lastApplet: Applet = .materials
+
+    // Materials: side and width are device preferences (AppPreferences) — kept across
+    // launches, the same for every lecture; what it shows is not.
     private var paneMaterialID: UUID?
-    /// The pane beside the notebook (regular width).
-    private var inlinePane: MaterialPaneViewController?
-    /// The pane as a sheet over the notebook — no room for two panes side by side
-    /// (iPhone, narrow Split View).
-    private var sheetPane: MaterialPaneViewController?
 
     private let divider = PaneDivider()
     /// Where the divider will land while it is dragged. The panes resize only on release:
@@ -185,7 +223,7 @@ final class NotebookViewController: UIViewController {
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) {
             (self: NotebookViewController, _) in
-            self.placePane(animated: false)
+            self.placePanel(animated: false)
         }
         // Leaving the active state (inactive or background).
         NotificationCenter.default.addObserver(
@@ -233,7 +271,9 @@ final class NotebookViewController: UIViewController {
 //        pageCounterLabel.sizeToFit()
 //        deletePageItem.isEnabled = coordinator.canDeleteCurrentPage
 //
-        rail.setApplet(Self.materialsApplet, active: showingMaterialPane)
+        for applet in Applet.allCases {
+            rail.setApplet(applet.rawValue, active: openApplet == applet)
+        }
 //
 //        exportOverlay.isHidden = !coordinator.isExporting
     }
@@ -259,15 +299,15 @@ final class NotebookViewController: UIViewController {
         layoutSplit()
     }
 
-    /// Notebook and material side by side. The notebook is the same child whether the
-    /// pane is open or not — the pane is an optional sibling on one side or the other —
-    /// so opening, closing or moving the pane never rebuilds the canvas (which would
+    /// Notebook and applet panel side by side. The notebook is the same child whether a
+    /// panel is open or not — the panel is an optional sibling on one side or the other —
+    /// so opening, closing or switching panels never rebuilds the canvas (which would
     /// drop its scroll position, zoom and any unsaved ink).
     ///
-    /// [sidebar | material | divider | notebook], or [sidebar | notebook | divider |
-    /// material] with the material on the right — mirrored in left-handed mode, the
+    /// [sidebar | panel | divider | notebook], or [sidebar | notebook | divider | panel]
+    /// for material set to open opposite the sidebar — mirrored in left-handed mode, the
     /// sidebar on the right. The sidebar never leaves its screen edge: it is the dock
-    /// the material slides out of.
+    /// the panels slide out of.
     ///
     /// The notebook runs the full height, under the status strip the way a page runs
     /// under a navigation bar: PaperKit insets the page by the safe area, and needs that
@@ -295,10 +335,12 @@ final class NotebookViewController: UIViewController {
         let paneHeight = bounds.height - safe.top - safe.bottom
         let dividerHeight = bounds.height - safe.top
         let notebookFrame: CGRect
-        if let pane = inlinePane {
-            let paneWidth = (bounds.width * clampedFraction(paneFraction)).rounded()
+        if let panel = inlinePanel {
+            let pane = panel.controller
+            let paneWidth = width(of: panel.applet)
             let notebookWidth = region.width - paneWidth - Self.dividerWidth
-            if paneIsOnLeft {
+            divider.isResizable = panel.applet.isResizable
+            if isOnLeft(panel.applet) {
                 pane.view.frame = CGRect(x: region.minX, y: paneTop, width: paneWidth, height: paneHeight)
                 divider.frame = CGRect(
                     x: region.minX + paneWidth, y: paneTop, width: Self.dividerWidth, height: dividerHeight)
@@ -315,9 +357,9 @@ final class NotebookViewController: UIViewController {
             divider.alpha = 1
         } else {
             notebookFrame = region
-            // Tucked where the material comes from, so it arrives and leaves with it.
+            // Tucked where the last panel came from, so it arrives and leaves with it.
             divider.frame = CGRect(
-                x: paneIsOnLeft ? region.minX - Self.dividerWidth : region.maxX, y: paneTop,
+                x: isOnLeft(lastApplet) ? region.minX - Self.dividerWidth : region.maxX, y: paneTop,
                 width: Self.dividerWidth, height: dividerHeight)
             divider.alpha = 0
         }
@@ -335,8 +377,8 @@ final class NotebookViewController: UIViewController {
         return ToolRailView.width + (rail.edge == .left ? safe.left : safe.right)
     }
 
-    /// Everything beside the sidebar, the full height: the notebook, and the material
-    /// when it is open.
+    /// Everything beside the sidebar, the full height: the notebook, and the applet
+    /// panel when one is open.
     private var contentRegion: CGRect {
         let bounds = view.bounds
         let shown = chromeHidden ? 0 : railWidth
@@ -344,17 +386,17 @@ final class NotebookViewController: UIViewController {
             x: rail.edge == .left ? shown : 0, y: 0, width: bounds.width - shown, height: bounds.height)
     }
 
-    /// Where the material sits while it slides in or out: behind the sidebar when it
-    /// opens on the sidebar's side, otherwise just off the screen's far edge.
-    private func tuckedFrame(of pane: UIView) -> CGRect {
-        var frame = pane.frame
+    /// Where an applet's panel sits while it slides in or out: behind the sidebar when
+    /// it opens on the sidebar's side, otherwise just off the screen's far edge.
+    private func tuckedFrame(_ frame: CGRect, of applet: Applet) -> CGRect {
+        var frame = frame
         let region = contentRegion
-        frame.origin.x = paneIsOnLeft ? region.minX - frame.width : region.maxX
+        frame.origin.x = isOnLeft(applet) ? region.minX - frame.width : region.maxX
         return frame
     }
 }
 
-// MARK: - Chrome: sidebar, status strip, tool wheel, tap to hide
+// MARK: - Chrome: sidebar, status strip, tool wheel, double-tap to hide
 
 extension NotebookViewController: UIGestureRecognizerDelegate {
     private func setUpChrome() {
@@ -363,12 +405,13 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         statusStrip.backgroundColor = ToolRailView.backgroundColor
         statusStrip.isUserInteractionEnabled = false
         view.insertSubview(statusStrip, aboveSubview: rail)
-        rail.addApplet(
-            RailApplet(
-                id: Self.materialsApplet, title: "Materials", symbol: "books.vertical",
-                activeSymbol: "books.vertical.fill",
-                action: { [weak self] in self?.toggleMaterialPane() }))
-        rail.setApplet(Self.materialsApplet, active: false)
+        for applet in Applet.allCases {
+            rail.addApplet(
+                RailApplet(
+                    id: applet.rawValue, title: applet.title, symbol: applet.symbol,
+                    activeSymbol: applet.activeSymbol,
+                    action: { [weak self] in self?.toggle(applet) }))
+        }
 
         toolbox.observe { [weak self] _ in
             self?.notebook.activateCurrentPage()
@@ -378,8 +421,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // Writing with a tool makes it one of the wheel's recent combinations.
         notebook.onBeginDrawing = { [weak self] in self?.toolbox.noteCurrentToolUsed() }
 
-        // A finger tap on the page: hide / show the chrome.
+        // A finger double-tap on the page: hide / show the chrome. Not a single tap —
+        // a palm or a stray finger brushing the page hid the sidebar all the time.
         let tap = UITapGestureRecognizer(target: self, action: #selector(pageTapped(_:)))
+        tap.numberOfTapsRequired = 2
         tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         tap.cancelsTouchesInView = false
         tap.delegate = self
@@ -494,7 +539,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 }
 
-// MARK: - Material pane
+// MARK: - Applet panels
 
 extension NotebookViewController {
     private var paneSide: MaterialPaneSide {
@@ -502,10 +547,21 @@ extension NotebookViewController {
             .flatMap(MaterialPaneSide.init(rawValue:)) ?? .default
     }
 
-    /// The material's side is relative to the sidebar (next to it, or opposite), and
-    /// the sidebar is on the left unless left-handed — see `MaterialPaneSide`.
-    private var paneIsOnLeft: Bool {
-        paneSide.isOnLeft(leftHanded: isLeftHanded)
+    /// Which side of the notes an applet's panel opens on. The sidebar is on the left
+    /// unless left-handed; material can be set to open opposite it (`MaterialPaneSide`),
+    /// the page thumbnails always open next to it.
+    private func isOnLeft(_ applet: Applet) -> Bool {
+        switch applet {
+        case .materials: paneSide.isOnLeft(leftHanded: isLeftHanded)
+        case .pages: !isLeftHanded
+        }
+    }
+
+    private func width(of applet: Applet) -> CGFloat {
+        switch applet {
+        case .materials: (view.bounds.width * clampedFraction(paneFraction)).rounded()
+        case .pages: PageThumbnailsViewController.preferredWidth
+        }
     }
 
     private var paneFraction: Double {
@@ -537,68 +593,91 @@ extension NotebookViewController {
             .flatMap { document.manifest.week(of: $0) }
     }
 
-    private func toggleMaterialPane() {
-        if !showingMaterialPane, paneMaterialID == nil {
+    /// The applet's sidebar button: opens it — in place of another one that is open —
+    /// or closes it if it is.
+    private func toggle(_ applet: Applet) {
+        if applet == .materials, openApplet != .materials, paneMaterialID == nil {
             // One file: open it straight away; otherwise the pane asks which one.
             let materials = document.manifest.materialList
             if materials.count == 1 { paneMaterialID = materials[0].id }
         }
-        setMaterialPaneShown(!showingMaterialPane)
+        setOpenApplet(openApplet == applet ? nil : applet)
     }
 
-    private func setMaterialPaneShown(_ shown: Bool) {
-        guard shown != showingMaterialPane else { return }
-        showingMaterialPane = shown
+    private func setOpenApplet(_ applet: Applet?) {
+        guard applet != openApplet else { return }
+        // The page on screen gets a current thumbnail before the thumbnails show.
+        if applet == .pages { coordinator.flushActivePage() }
+        openApplet = applet
+        if let applet { lastApplet = applet }
         setNeedsUpdateProperties()
-        placePane(animated: true)
+        placePanel(animated: true)
     }
 
-    /// Puts the pane where it belongs for `showingMaterialPane` and the size class:
-    /// beside the notebook, in a sheet, or nowhere. Also runs when the size class changes.
-    private func placePane(animated: Bool) {
-        let wantsInline = showingMaterialPane && !isCompact
-        let wantsSheet = showingMaterialPane && isCompact
+    /// Puts the open applet's panel where it belongs for the size class: beside the
+    /// notebook, in a sheet, or nowhere. Switching applets slides the old panel away
+    /// while the new one slides out. Also runs when the size class changes.
+    private func placePanel(animated: Bool) {
+        let wantsInline = isCompact ? nil : openApplet
+        let wantsSheet = isCompact ? openApplet : nil
 
-        if !wantsSheet, let sheetPane {
-            self.sheetPane = nil
-            sheetPane.dismiss(animated: animated)
-        }
-        if wantsSheet, sheetPane == nil {
-            let pane = makePane(inline: false)
-            pane.presentationController?.delegate = self
-            sheetPane = pane
-            present(pane, animated: animated)
+        // Sheet: a new one is presented once the old one is gone.
+        if sheetPanel?.applet != wantsSheet {
+            let old = sheetPanel
+            var presentNew: () -> Void = {}
+            if let wantsSheet {
+                let controller = makePanel(wantsSheet, inline: false)
+                controller.presentationController?.delegate = self
+                sheetPanel = Panel(applet: wantsSheet, controller: controller)
+                presentNew = { [weak self] in self?.present(controller, animated: animated) }
+            } else {
+                sheetPanel = nil
+            }
+            if let old {
+                old.controller.dismiss(animated: animated, completion: presentNew)
+            } else {
+                presentNew()
+            }
         }
 
-        if wantsInline, inlinePane == nil {
-            let pane = makePane(inline: true)
-            addChild(pane)
-            view.insertSubview(pane.view, belowSubview: divider)
-            pane.didMove(toParent: self)
-            // Slides out from behind the sidebar: laid out at its final size, then
-            // started off the screen's edge.
-            inlinePane = pane
+        guard inlinePanel?.applet != wantsInline else { return }
+        let old = inlinePanel
+        var new: Panel?
+        if let wantsInline {
+            let controller = makePanel(wantsInline, inline: true)
+            addChild(controller)
+            view.insertSubview(controller.view, belowSubview: divider)
+            controller.didMove(toParent: self)
+            let panel = Panel(applet: wantsInline, controller: controller)
+            new = panel
+            // Laid out at its final size, then started tucked away — behind the
+            // sidebar or off the far edge — with everything else where it was.
             UIView.performWithoutAnimation {
+                inlinePanel = panel
                 layoutSplit()
-                inlinePane = nil
+                let final = controller.view.frame
+                inlinePanel = old
                 layoutSplit()
-                inlinePane = pane
-                pane.view.frame = tuckedFrame(of: pane.view)
-                pane.view.layoutIfNeeded()
-            }
-            animateLayout(animated)
-        } else if !wantsInline, let pane = inlinePane {
-            inlinePane = nil
-            pane.willMove(toParent: nil)
-            animateLayout(animated, changes: { pane.view.frame = self.tuckedFrame(of: pane.view) }) {
-                pane.view.removeFromSuperview()
-                pane.removeFromParent()
+                controller.view.frame = tuckedFrame(final, of: wantsInline)
+                controller.view.layoutIfNeeded()
             }
         }
+        inlinePanel = new
+        old?.controller.willMove(toParent: nil)
+        animateLayout(
+            animated,
+            changes: {
+                guard let old else { return }
+                old.controller.view.frame = self.tuckedFrame(old.controller.view.frame, of: old.applet)
+            },
+            completion: {
+                old?.controller.view.removeFromSuperview()
+                old?.controller.removeFromParent()
+            })
     }
 
     /// Re-lays out the split (in a spring animation when `animated`), then gives the
-    /// tool picker back: opening or closing the pane moves first responder.
+    /// tool picker back: opening or closing a panel moves first responder.
     private func animateLayout(
         _ animated: Bool, changes: @escaping () -> Void = {}, completion: @escaping () -> Void = {}
     ) {
@@ -621,35 +700,56 @@ extension NotebookViewController {
             animations: update, completion: { _ in finish() })
     }
 
-    private func makePane(inline: Bool) -> MaterialPaneViewController {
-        let pane = MaterialPaneViewController(document: document) { [weak self] in
-            self?.currentWeek
+    private func makePanel(_ applet: Applet, inline: Bool) -> UIViewController {
+        switch applet {
+        case .materials:
+            let pane = MaterialPaneViewController(document: document) { [weak self] in
+                self?.currentWeek
+            }
+            pane.materialID = paneMaterialID
+            pane.onMaterialChange = { [weak self] id in self?.paneMaterialID = id }
+            pane.onClose = { [weak self] in self?.setOpenApplet(nil) }
+            pane.onAdd = { [weak self] in self?.showMaterialImporter() }
+            if inline {
+                pane.onContentShown = { [weak self] in self?.coordinator.reclaimFocus() }
+            }
+            return pane
+        case .pages:
+            let pages = PageThumbnailsViewController(
+                document: document, repository: repository, coordinator: coordinator)
+            pages.onSelectPage = { [weak self] index in
+                self?.coordinator.showPage(at: index)
+                // As a sheet it covers the page it just went to.
+                if !inline { self?.setOpenApplet(nil) }
+            }
+            pages.onClose = { [weak self] in self?.setOpenApplet(nil) }
+            if showsTools {
+                pages.onAddPage = { [weak self] in self?.coordinator.addPage() }
+            }
+            if !inline, let sheet = pages.sheetPresentationController {
+                sheet.detents = [.medium(), .large()]
+                sheet.prefersGrabberVisible = true
+            }
+            return pages
         }
-        pane.materialID = paneMaterialID
-        pane.onMaterialChange = { [weak self] id in self?.paneMaterialID = id }
-        pane.onClose = { [weak self] in self?.setMaterialPaneShown(false) }
-        pane.onAdd = { [weak self] in self?.showMaterialImporter() }
-        if inline {
-            pane.onContentShown = { [weak self] in self?.coordinator.reclaimFocus() }
-        }
-        return pane
     }
 
-    /// Dragging the divider: the material's width is measured from the edge of the
-    /// region beside the sidebar, as a share of the screen's width.
+    /// Dragging the divider resizes the material: its width is measured from the edge of
+    /// the region beside the sidebar, as a share of the screen's width.
     @objc private func dividerPanned(_ recognizer: UIPanGestureRecognizer) {
         let total = view.bounds.width
-        guard total > 0 else { return }
+        guard total > 0, inlinePanel?.applet == .materials else { return }
+        let onLeft = isOnLeft(.materials)
         let region = contentRegion
         let half = Self.dividerWidth / 2
         switch recognizer.state {
         case .began, .changed:
             let x = recognizer.location(in: view).x
-            let width = paneIsOnLeft ? x - half - region.minX : region.maxX - x - half
+            let width = onLeft ? x - half - region.minX : region.maxX - x - half
             let fraction = clampedFraction(width / total)
             dragFraction = fraction
             let paneWidth = (fraction * total).rounded()
-            let lineX = paneIsOnLeft ? region.minX + paneWidth + half : region.maxX - paneWidth - half
+            let lineX = onLeft ? region.minX + paneWidth + half : region.maxX - paneWidth - half
             dragIndicator.frame = CGRect(x: lineX - 1.5, y: 0, width: 3, height: view.bounds.height)
             dragIndicator.isHidden = false
         case .ended:
@@ -681,9 +781,9 @@ extension NotebookViewController {
             }
             guard let first = result.added.first else { return }
             paneMaterialID = first.id
-            inlinePane?.materialID = first.id
-            sheetPane?.materialID = first.id
-            setMaterialPaneShown(true)
+            (inlinePanel?.controller as? MaterialPaneViewController)?.materialID = first.id
+            (sheetPanel?.controller as? MaterialPaneViewController)?.materialID = first.id
+            setOpenApplet(.materials)
         }
     }
 }
@@ -697,11 +797,11 @@ extension NotebookViewController: UIDocumentPickerDelegate {
 }
 
 extension NotebookViewController: UIAdaptivePresentationControllerDelegate {
-    /// The material sheet was swiped away.
+    /// An applet's sheet was swiped away.
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        guard presentationController.presentedViewController === sheetPane else { return }
-        sheetPane = nil
-        showingMaterialPane = false
+        guard presentationController.presentedViewController === sheetPanel?.controller else { return }
+        sheetPanel = nil
+        openApplet = nil
         setNeedsUpdateProperties()
         coordinator.reclaimFocus()
     }
@@ -769,6 +869,16 @@ private final class PaneDivider: UIView {
         addSubview(grip)
         isAccessibilityElement = true
         accessibilityLabel = "Resize Material"
+    }
+
+    /// Off for a panel of fixed width: a plain hairline, nothing to grab.
+    var isResizable = true {
+        didSet {
+            guard isResizable != oldValue else { return }
+            grip.isHidden = !isResizable
+            isUserInteractionEnabled = isResizable
+            isAccessibilityElement = isResizable
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
