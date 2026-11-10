@@ -12,13 +12,14 @@
 //  Course material can open beside the notebook (the split button): see
 //  `MaterialPaneViewController` and "Material pane" below.
 //
-//  No navigation bar (2026-11-09): back and the split button float on the notebook's
-//  own top-left corner, so they stay on the page side when material is open beside
-//  it, and the tools are the rail down the notebook's leading edge (`ToolRailView`)
-//  and the tool disk (`ToolDiskView`, two-finger sideways swipe) instead of the system
-//  tool picker. A finger tap anywhere on the page hides all of it, the
-//  status bar and the home indicator too, for a clean page — tap again to bring it
-//  back. See "Chrome" below.
+//  No navigation bar (2026-11-09): a black sidebar (`ToolRailView`) runs down the
+//  notebook's leading edge — back at the top, the tools, and at the bottom the
+//  materials button, which slides the material out of the sidebar beside the notes.
+//  It stays with the notebook when material is open: [material | sidebar | notebook].
+//  The tool disk (`ToolDiskView`, two-finger sideways swipe) has the same tools; the
+//  system tool picker isn't shown. A finger tap anywhere on the page slides the sidebar
+//  away and hides the status bar and home indicator for a clean page — tap again to
+//  bring them back. See "Chrome" below.
 //
 //  Owns the autosave timer's lifecycle (start on appear, flush + stop on disappear or
 //  when the app leaves the active state) — see NotebookCoordinator.swift and
@@ -37,15 +38,18 @@ final class NotebookViewController: UIViewController {
 
     // MARK: - Chrome
     //
-    // The corner buttons and the tool rail float over the notebook; `chromeHidden`
-    // fades them (and the status bar and home indicator) out.
+    // The sidebar sits beside the notebook; `chromeHidden` slides it away (and hides
+    // the status bar and home indicator).
 
     private let toolbox = NotebookToolbox()
-    private lazy var rail = ToolRailView { [weak self] action in self?.perform(action) }
+    private lazy var rail = ToolRailView(
+        showsTools: PageCanvasController.isEditingAvailable,
+        send: { [weak self] action in self?.perform(action) },
+        onBack: { [weak self] in self?.navigationController?.popViewController(animated: true) },
+        onMaterials: { [weak self] in self?.toggleMaterialPane() })
     private var disk: ToolDiskView?
-    private let cornerGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     private var chromeHidden = false
-    private var showsRail: Bool { PageCanvasController.isEditingAvailable }
+    private var showsTools: Bool { PageCanvasController.isEditingAvailable }
 
     init(document: LectureDocument, route: NotebookRoute) {
         self.document = document
@@ -87,31 +91,6 @@ final class NotebookViewController: UIViewController {
 
     private static let dividerWidth: CGFloat = 14
 
-    // MARK: - Corner buttons
-
-    private lazy var paneButton = cornerButton(
-        "rectangle.split.2x1", label: "Open Material Beside Notes"
-    ) { [weak self] in self?.toggleMaterialPane() }
-    private lazy var backButton = cornerButton("chevron.backward", label: "Back") { [weak self] in
-        self?.navigationController?.popViewController(animated: true)
-    }
-
-    private func cornerButton(_ symbol: String, label: String, action: @escaping () -> Void)
-        -> UIButton
-    {
-        var configuration = UIButton.Configuration.plain()
-        configuration.image = UIImage(systemName: symbol)
-        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 19, weight: .medium)
-        configuration.baseForegroundColor = .label
-        let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
-        button.accessibilityLabel = label
-        button.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 48),
-            button.heightAnchor.constraint(equalToConstant: 48),
-        ])
-        return button
-    }
 //    // Quick add: files land under this session's week and open beside the notes.
 //    private lazy var addMaterialItem = UIBarButtonItem(
 //        title: "Add Material", image: UIImage(systemName: "paperclip.badge.plus"),
@@ -245,10 +224,7 @@ final class NotebookViewController: UIViewController {
 //        pageCounterLabel.sizeToFit()
 //        deletePageItem.isEnabled = coordinator.canDeleteCurrentPage
 //
-        paneButton.accessibilityLabel =
-            showingMaterialPane ? "Hide Material" : "Open Material Beside Notes"
-        paneButton.configuration?.image = UIImage(
-            systemName: showingMaterialPane ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+        rail.setMaterialsOpen(showingMaterialPane)
 //
 //        exportOverlay.isHidden = !coordinator.isExporting
     }
@@ -283,59 +259,66 @@ final class NotebookViewController: UIViewController {
     /// in the safe area, and the divider runs from under the top bar to the bottom edge.
     private func layoutSplit() {
         placeNotebookAndPane()
-        layoutChrome()
     }
 
+    /// [material | sidebar | notebook], or [sidebar | notebook | divider | material]
+    /// with the material on the right. The sidebar stays at the notebook's leading
+    /// edge, so its controls are on the page side either way; on the left it is also the
+    /// handle that resizes the material (see `dividerPanned`). With the chrome hidden
+    /// the sidebar slides away and the notebook takes its width.
     private func placeNotebookAndPane() {
         let bounds = view.bounds
-        guard let pane = inlinePane else {
-            notebook.view.frame = bounds
-            divider.isHidden = true
-            return
-        }
         let safe = view.safeAreaInsets
-        let total = bounds.width
-        let paneWidth = (total * clampedFraction(paneFraction)).rounded()
-        let rest = total - paneWidth - Self.dividerWidth
-        let paneHeight = bounds.height - safe.top - safe.bottom
-        let dividerHeight = bounds.height - safe.top
-
-        if paneIsOnLeft {
-            pane.view.frame = CGRect(x: 0, y: safe.top, width: paneWidth, height: paneHeight)
-            divider.frame = CGRect(
-                x: paneWidth, y: safe.top, width: Self.dividerWidth, height: dividerHeight)
-            notebook.view.frame = CGRect(
-                x: paneWidth + Self.dividerWidth, y: 0, width: rest, height: bounds.height)
+        let side = chromeHidden ? 0 : ToolRailView.width
+        let fullHeight = bounds.height - safe.top
+        var region = bounds
+        if let pane = inlinePane {
+            let total = bounds.width
+            let paneWidth = (total * clampedFraction(paneFraction)).rounded()
+            let paneHeight = bounds.height - safe.top - safe.bottom
+            if paneIsOnLeft {
+                pane.view.frame = CGRect(x: 0, y: safe.top, width: paneWidth, height: paneHeight)
+                region = CGRect(x: paneWidth, y: 0, width: total - paneWidth, height: bounds.height)
+                divider.isHidden = true
+            } else {
+                let rest = total - paneWidth - Self.dividerWidth
+                region = CGRect(x: 0, y: 0, width: rest, height: bounds.height)
+                divider.frame = CGRect(
+                    x: rest, y: safe.top, width: Self.dividerWidth, height: fullHeight)
+                pane.view.frame = CGRect(
+                    x: rest + Self.dividerWidth, y: safe.top, width: paneWidth, height: paneHeight)
+                divider.isHidden = false
+            }
         } else {
-            notebook.view.frame = CGRect(x: 0, y: 0, width: rest, height: bounds.height)
-            divider.frame = CGRect(
-                x: rest, y: safe.top, width: Self.dividerWidth, height: dividerHeight)
-            pane.view.frame = CGRect(
-                x: rest + Self.dividerWidth, y: safe.top, width: paneWidth, height: paneHeight)
+            divider.isHidden = true
         }
-        divider.isHidden = false
+        rail.frame = CGRect(
+            x: region.minX + side - ToolRailView.width, y: safe.top,
+            width: ToolRailView.width, height: fullHeight)
+        notebook.view.frame = CGRect(
+            x: region.minX + side, y: 0, width: region.width - side, height: bounds.height)
+    }
+
+    /// Where the material sits while it slides in or out — just past the sidebar, off
+    /// the screen's edge.
+    private func tuckedFrame(of pane: UIView) -> CGRect {
+        var frame = pane.frame
+        frame.origin.x = paneIsOnLeft ? -frame.width : view.bounds.maxX
+        return frame
     }
 }
 
-// MARK: - Chrome: corner buttons, rail, disk, tap to hide
+// MARK: - Chrome: sidebar, disk, tap to hide
 
 extension NotebookViewController: UIGestureRecognizerDelegate {
     private func setUpChrome() {
-        let stack = UIStackView(arrangedSubviews: [backButton, paneButton])
-        stack.spacing = 0
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        cornerGlass.cornerConfiguration = .capsule()
-        cornerGlass.contentView.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: cornerGlass.contentView.topAnchor, constant: 4),
-            stack.bottomAnchor.constraint(equalTo: cornerGlass.contentView.bottomAnchor, constant: -4),
-            stack.leadingAnchor.constraint(equalTo: cornerGlass.contentView.leadingAnchor, constant: 4),
-            stack.trailingAnchor.constraint(equalTo: cornerGlass.contentView.trailingAnchor, constant: -4),
-        ])
-        view.addSubview(cornerGlass)
-
-        rail.isHidden = !showsRail
-        view.addSubview(rail)
+        // Above the material, so the material slides out from behind it.
+        view.insertSubview(rail, belowSubview: dragIndicator)
+        rail.setMaterialsOpen(false)
+        // With the material on the left, dragging the sidebar sideways resizes it.
+        let resize = UIPanGestureRecognizer(target: self, action: #selector(dividerPanned(_:)))
+        resize.delegate = self
+        rail.addGestureRecognizer(resize)
 
         toolbox.observe { [weak self] _ in
             self?.notebook.activateCurrentPage()
@@ -351,7 +334,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         notebook.view.addGestureRecognizer(tap)
 
         // Two fingers swiped sideways: the tool disk.
-        guard showsRail else { return }
+        guard showsTools else { return }
         for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
             let swipe = UISwipeGestureRecognizer(target: self, action: #selector(twoFingerSwipe(_:)))
             swipe.direction = direction
@@ -366,37 +349,23 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // toolbox.
     }
 
-    private func layoutChrome() {
-        let notebookFrame = notebook.view.frame
-        let safe = view.safeAreaInsets
-        let corner = cornerGlass.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
-        cornerGlass.frame = CGRect(
-            x: notebookFrame.minX + 10, y: safe.top + 10, width: corner.width, height: corner.height)
-
-        let top = cornerGlass.frame.maxY + 10
-        let available = view.bounds.height - safe.bottom - 10 - top
-        let height = min(rail.contentHeight, max(available, 0))
-        // Centred under the corner buttons' back button.
-        rail.frame = CGRect(
-            x: cornerGlass.frame.minX + 4 + 24 - ToolRailView.width / 2, y: top,
-            width: ToolRailView.width, height: height)
-        notebook.leadingObstruction =
-            showsRail && !chromeHidden ? rail.frame.maxX - notebookFrame.minX : 0
-    }
-
+    /// Slides the sidebar away (the notebook takes its width) and hides the status bar
+    /// and home indicator — or brings them back.
     private func setChromeHidden(_ hidden: Bool) {
         guard hidden != chromeHidden else { return }
         chromeHidden = hidden
-        let chrome: [UIView] = showsRail ? [cornerGlass, rail] : [cornerGlass]
-        if !hidden { chrome.forEach { $0.isHidden = false } }
-        UIView.animate(withDuration: 0.25) {
-            chrome.forEach { $0.alpha = hidden ? 0 : 1 }
+        if !hidden { rail.isHidden = false }
+        UIView.animate(
+            withDuration: 0.3, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0
+        ) {
+            self.rail.alpha = hidden ? 0 : 1
             self.setNeedsStatusBarAppearanceUpdate()
+            self.view.setNeedsLayout()
+            self.view.layoutIfNeeded()
         } completion: { _ in
-            if self.chromeHidden { chrome.forEach { $0.isHidden = true } }
+            if self.chromeHidden { self.rail.isHidden = true }
         }
         setNeedsUpdateOfHomeIndicatorAutoHidden()
-        view.setNeedsLayout()
     }
 
     @objc private func pageTapped(_ recognizer: UITapGestureRecognizer) {
@@ -410,6 +379,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Dragging the sidebar sideways resizes the material — when it's on the left,
+        // and only sideways, so the tools still scroll.
+        if let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.view === rail {
+            let velocity = pan.velocity(in: view)
+            return inlinePane != nil && paneIsOnLeft && abs(velocity.x) > abs(velocity.y)
+        }
         // Zoomed in, two fingers pan the page sideways.
         guard gestureRecognizer is UISwipeGestureRecognizer else { return true }
         return !(notebook.currentCanvas?.isZoomedIn ?? false)
@@ -462,6 +437,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return
         }
         let disk = ToolDiskView { [weak self] action in self?.perform(action) }
+        disk.onLayout = { [weak self] in self?.refreshTools() }
         disk.onDismiss = { [weak self, weak disk] in
             if self?.disk === disk { self?.disk = nil }
             self?.coordinator.reclaimFocus()
@@ -555,14 +531,22 @@ extension NotebookViewController {
             addChild(pane)
             view.insertSubview(pane.view, belowSubview: divider)
             pane.didMove(toParent: self)
+            // Slides out from behind the sidebar: laid out at its final size, then
+            // started off the screen's edge.
             inlinePane = pane
-            pane.view.alpha = 0
-            layoutSplit()
-            animateLayout(animated, changes: { pane.view.alpha = 1 })
+            UIView.performWithoutAnimation {
+                layoutSplit()
+                inlinePane = nil
+                layoutSplit()
+                inlinePane = pane
+                pane.view.frame = tuckedFrame(of: pane.view)
+                pane.view.layoutIfNeeded()
+            }
+            animateLayout(animated)
         } else if !wantsInline, let pane = inlinePane {
             inlinePane = nil
             pane.willMove(toParent: nil)
-            animateLayout(animated, changes: { pane.view.alpha = 0 }) {
+            animateLayout(animated, changes: { pane.view.frame = self.tuckedFrame(of: pane.view) }) {
                 pane.view.removeFromSuperview()
                 pane.removeFromParent()
             }

@@ -19,6 +19,9 @@ import UIKit
 final class ToolDiskView: UIView {
     let controls: ToolControls
     var onDismiss: () -> Void = {}
+    /// After every layout: the tool pictures' angles changed, so the notebook re-shows
+    /// the toolbox (which slides the tool in hand out along its angle).
+    var onLayout: () -> Void = {}
 
     private let disc = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     private var outer: [UIView] = []
@@ -35,6 +38,13 @@ final class ToolDiskView: UIView {
         dismiss = { [weak self] in self?.dismiss(after: 0.12) }
 
         backgroundColor = UIColor.black.withAlphaComponent(0.06)
+        // Dark, like the sidebar.
+        overrideUserInterfaceStyle = .dark
+        disc.effect = {
+            let glass = UIGlassEffect(style: .regular)
+            glass.tintColor = UIColor.black.withAlphaComponent(0.75)
+            return glass
+        }()
         addSubview(disc)
 
         outer = NotebookToolKind.allCases.compactMap { controls.toolButtons[$0] }
@@ -79,6 +89,7 @@ final class ToolDiskView: UIView {
         place(outer, radius: r - 42, center: local, from: 165, to: 15)
         place(inner, radius: r - 112, center: local, from: 160, to: 20)
         place(hub, radius: max(r - 182, 60), center: local, from: 155, to: 25)
+        onLayout()
     }
 
     /// Spreads `views` evenly along an arc, angles in degrees, 0° = right, 90° = up.
@@ -87,10 +98,14 @@ final class ToolDiskView: UIView {
         let step = views.count > 1 ? (to - from) / CGFloat(views.count - 1) : 0
         for (index, view) in views.enumerated() {
             let angle = (from + step * CGFloat(index)) * .pi / 180
-            let size: CGFloat = view is UIColorWell ? 32 : 46
-            view.bounds = CGRect(x: 0, y: 0, width: size, height: size)
+            let size = controls.size(of: view)
+            view.bounds = CGRect(origin: .zero, size: size)
             view.center = CGPoint(
                 x: center.x + radius * cos(angle), y: center.y - radius * sin(angle))
+            // Tool pictures point outwards, nib to the rim — like pens in a tray.
+            if let kind = controls.toolButtons.first(where: { $0.value === view })?.key {
+                controls.setRestingTransform(CGAffineTransform(rotationAngle: -angle), for: kind)
+            }
         }
     }
 

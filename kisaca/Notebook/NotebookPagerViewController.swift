@@ -76,10 +76,6 @@ final class NotebookPagerViewController: UIViewController {
     /// is the Pencil's double-tap switching back, not a new ink chosen.
     private var pickerWasOnEraser = false
 
-    /// Width covered by the tool rail at the leading edge; the left turn zone starts
-    /// after it.
-    var leadingObstruction: CGFloat = 0
-
     private lazy var turnGate = TurnGestureGate { [weak self] recognizer in
         self?.mayTurn(with: recognizer) ?? false
     }
@@ -232,12 +228,12 @@ final class NotebookPagerViewController: UIViewController {
     enum TurnZone { case back, forward }
 
     /// The strip along a side edge where a finger turns the page: the right one
-    /// forward, the left one (after the tool rail) back. Everywhere else is the page's
+    /// forward, the left one back. Everywhere else is the page's
     /// own — fingers scroll, zoom, and tap to hide the controls there.
     func turnZone(at point: CGPoint) -> TurnZone? {
         let width = max(64, view.bounds.width * 0.1)
         if point.x >= view.bounds.maxX - width { return .forward }
-        if point.x >= leadingObstruction, point.x <= leadingObstruction + width { return .back }
+        if point.x <= width { return .back }
         return nil
     }
 
