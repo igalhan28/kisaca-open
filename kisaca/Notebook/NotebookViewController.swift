@@ -156,9 +156,18 @@ final class NotebookViewController: UIViewController {
 //    private lazy var selectedTextItem = UIBarButtonItem(
 //        title: "Selected Text", image: UIImage(systemName: "text.magnifyingglass"),
 //        primaryAction: UIAction { [weak self] _ in self?.coordinator.showSelectedText() })
-//    private lazy var exportItem = UIBarButtonItem(
-//        title: "Export", image: UIImage(systemName: "square.and.arrow.up"),
-//        primaryAction: UIAction { [weak self] _ in self?.showExportOptions() })
+    /// Liquid-glass Export button floating over the notebook's top corner (iOS 26).
+    private lazy var exportItem: UIButton = {
+        var configuration = UIButton.Configuration.glass()
+        configuration.image = UIImage(systemName: "square.and.arrow.up")
+        configuration.baseBackgroundColor = .label
+        let button = UIButton(
+            configuration: configuration,
+            primaryAction: UIAction { [weak self] _ in self?.showExportOptions() })
+        button.accessibilityLabel = "Export"
+        button.overrideUserInterfaceStyle = .light
+        return button
+    }()
 //    private lazy var undoItem = UIBarButtonItem(
 //        title: "Undo", image: UIImage(systemName: "arrow.uturn.backward"),
 //        primaryAction: UIAction { [weak self] _ in self?.coordinator.undo() })
@@ -182,7 +191,8 @@ final class NotebookViewController: UIViewController {
         addChild(notebook)
         view.addSubview(notebook.view)
         notebook.didMove(toParent: self)
-
+        
+        
         divider.alpha = 0
         divider.addGestureRecognizer(
             UIPanGestureRecognizer(target: self, action: #selector(dividerPanned(_:))))
@@ -194,11 +204,13 @@ final class NotebookViewController: UIViewController {
         view.addSubview(dragIndicator)
 
         setUpChrome()
+        view.addSubview(exportItem)
 
         exportOverlay.frame = view.bounds
         exportOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         exportOverlay.isHidden = true
         view.addSubview(exportOverlay)
+
 
 //        // Compact: next to a long title ("Lectures · W12 · Thu") a "Page 5 of 23" label
 //        // gets truncated, so the counter is just "5 / 23".
@@ -364,6 +376,13 @@ final class NotebookViewController: UIViewController {
             divider.alpha = 0
         }
         notebook.view.frame = notebookFrame
+
+        let exportSize: CGFloat = 44
+        let margin: CGFloat = 12
+        exportItem.frame = CGRect(
+            x: notebookFrame.maxX - exportSize - margin, y: safe.top + margin,
+            width: exportSize, height: exportSize)
+        exportItem.alpha = chromeHidden ? 0 : 1
     }
 
     private var isLeftHanded: Bool {
@@ -448,6 +467,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if !hidden {
             rail.isHidden = false
             statusStrip.isHidden = false
+            exportItem.isHidden = false
         }
         UIView.animate(
             withDuration: 0.3, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0
@@ -459,6 +479,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             if self.chromeHidden {
                 self.rail.isHidden = true
                 self.statusStrip.isHidden = true
+                self.exportItem.isHidden = true
             }
         }
         setNeedsUpdateOfHomeIndicatorAutoHidden()
@@ -835,7 +856,7 @@ extension NotebookViewController {
     /// iPad requires (it crashes without a source).
     private func share(_ url: URL) {
         let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-//        activity.popoverPresentationController?.sourceItem = exportItem
+        activity.popoverPresentationController?.sourceItem = exportItem
         if let presented = presentedViewController {
             presented.dismiss(animated: true) { [weak self] in
                 self?.present(activity, animated: true)
