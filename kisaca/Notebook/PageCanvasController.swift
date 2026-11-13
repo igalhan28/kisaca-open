@@ -40,9 +40,11 @@ final class PageCanvasController: UIViewController {
     /// -KisacaFingerInk YES`. Off by default, so fingers turn pages, scroll and open
     /// turn the tool wheel in the simulator exactly as they do on an iPad.
     private static let editingTouchTypes: [NSNumber] =
-        fingerInks
-        ? [UITouch.TouchType.pencil, .direct].map { NSNumber(value: $0.rawValue) }
-        : [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+//        fingerInks
+//        ?
+    [UITouch.TouchType.pencil, .direct].map { NSNumber(value: $0.rawValue) }
+//        :
+//    [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
 
     /// The simulator's opt-in finger ink (see `editingTouchTypes`). It also shows the
     /// system tool picker (see `activate`): PaperKit lets a finger draw only while one

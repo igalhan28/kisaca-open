@@ -1,5 +1,7 @@
 # Notebook sidebar
 
+> Part of the architecture docs — start at [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 The note-taking screen (`NotebookViewController`) has no navigation bar. Its chrome is
 a dark frame: a **sidebar** down one screen edge and a **status strip** across the top.
 The sidebar works like Ubuntu's dock: it launches *applets* (panels that slide out
@@ -38,6 +40,10 @@ This page describes how that frame is built and how to extend it. Introduced
   page is ~3% zoomed in, pans sideways, and `isZoomedIn` turns true, which blocks the
   tool wheel.
 - **The applet panel and the divider** start below the status bar.
+- **Export button** (`exportItem`): a 44 pt liquid-glass button (`UIButton.Configuration.glass()`,
+  forced light style) floating 12 pt inside the notebook's top-right corner, below the status
+  bar. It opens `showExportOptions()` and anchors the share sheet's popover. It hides and shows
+  with the rest of the chrome. Added back 2026-11-13; the old nav-bar Export item is gone.
 - **Hiding the chrome:** a **finger double-tap** on the page slides the sidebar off its
   edge, fades the strip, and hides the status bar and home indicator. Double-tap again
   to bring them back. (It was a single tap, which stray touches triggered too easily.)
@@ -49,7 +55,7 @@ All of this layout lives in `NotebookViewController.layoutSplit()`. Its helpers:
   sidebar's side that is behind the sidebar; otherwise it is off the far edge.
 
 Z-order, bottom to top: notebook → applet panel → divider → sidebar → status strip →
-drag indicator → tool wheel → export overlay. The sidebar sits above the panel, so
+drag indicator → export button → tool wheel → export overlay. The sidebar sits above the panel, so
 the panel slides out from behind it.
 
 ## Sidebar anatomy (`ToolRailView`)
